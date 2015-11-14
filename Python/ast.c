@@ -2869,29 +2869,69 @@ ast_for_expr_stmt(struct compiling *c, const node *n)
         asdl_seq *targets;
         node *value;
         expr_ty expression;
+        expr_ty type = NULL;
 
-        /* a normal assignment */
-        REQ(CHILD(n, 1), EQUAL);
-        targets = _Py_asdl_seq_new(NCH(n) / 2, c->c_arena);
-        if (!targets)
-            return NULL;
-        for (i = 0; i < NCH(n) - 2; i += 2) {
+        /* either a normal assignment or a declaration */
+        if (TYPE(CHILD(n, 1)) == EQUAL) {
+            /* a normal assignment */
+            REQ(CHILD(n, 1), EQUAL);
+
+            targets = _Py_asdl_seq_new(NCH(n) / 2, c->c_arena);
+            if (!targets)
+                return NULL;
+            for (i = 0; i < NCH(n) - 2; i += 2) {
+                expr_ty e;
+                node *ch = CHILD(n, i);
+                if (TYPE(ch) == yield_expr) {
+                    ast_error(c, ch, "assignment to yield expression not possible");
+                    return NULL;
+                }
+                e = ast_for_testlist(c, ch);
+                if (!e)
+                    return NULL;
+
+                /* set context to assign */
+                if (!set_context(c, e, Store, CHILD(n, i)))
+                    return NULL;
+
+                asdl_seq_SET(targets, i / 2, e);
+            }
+        } else {
+            /* a declaration */
+            REQ(CHILD(n, 1), COLON);
+
+            targets = _Py_asdl_seq_new(1, c->c_arena);
+            if (!targets)
+                return NULL;
+
             expr_ty e;
-            node *ch = CHILD(n, i);
+            node *ch = CHILD(n, 0);
             if (TYPE(ch) == yield_expr) {
                 ast_error(c, ch, "assignment to yield expression not possible");
                 return NULL;
             }
             e = ast_for_testlist(c, ch);
             if (!e)
-              return NULL;
+                return NULL;
 
             /* set context to assign */
-            if (!set_context(c, e, Store, CHILD(n, i)))
-              return NULL;
+            if (!set_context(c, e, Store, CHILD(n, 0)))
+                return NULL;
 
-            asdl_seq_SET(targets, i / 2, e);
+            asdl_seq_SET(targets, 0, e);
+
+            /* Extract the type if present */
+            if (NCH(n) == 5) {
+                /* XXX prevent explicitly typing ellipsis for infer? */
+                type = ast_for_expr(c, CHILD(n, 2));
+            } else {
+                /* The ellipsis form is used for "infer type" */
+                type = Ellipsis(LINENO(CHILD(n, 1)),
+                                CHILD(n, 1)->n_col_offset,
+                                c->c_arena);
+            }
         }
+
         value = CHILD(n, NCH(n) - 1);
         if (TYPE(value) == testlist_star_expr)
             expression = ast_for_testlist(c, value);
@@ -2899,7 +2939,7 @@ ast_for_expr_stmt(struct compiling *c, const node *n)
             expression = ast_for_expr(c, value);
         if (!expression)
             return NULL;
-        return Assign(targets, expression, LINENO(n), n->n_col_offset, c->c_arena);
+        return Assign(targets, expression, 0, LINENO(n), n->n_col_offset, c->c_arena);
     }
 }
 

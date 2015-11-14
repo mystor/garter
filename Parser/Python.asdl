@@ -22,7 +22,7 @@ module Python
           | Return(expr? value)
 
           | Delete(expr* targets)
-          | Assign(expr* targets, expr value)
+          | Assign(expr* targets, expr value, expr? type)
           | AugAssign(expr target, operator op, expr value)
 
           -- use 'orelse' because else is a keyword in target languages

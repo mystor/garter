@@ -108,6 +108,7 @@ struct _stmt {
         struct {
             asdl_seq *targets;
             expr_ty value;
+            expr_ty type;
         } Assign;
         
         struct {
@@ -451,9 +452,9 @@ stmt_ty _Py_Return(expr_ty value, int lineno, int col_offset, PyArena *arena);
 #define Delete(a0, a1, a2, a3) _Py_Delete(a0, a1, a2, a3)
 stmt_ty _Py_Delete(asdl_seq * targets, int lineno, int col_offset, PyArena
                    *arena);
-#define Assign(a0, a1, a2, a3, a4) _Py_Assign(a0, a1, a2, a3, a4)
-stmt_ty _Py_Assign(asdl_seq * targets, expr_ty value, int lineno, int
-                   col_offset, PyArena *arena);
+#define Assign(a0, a1, a2, a3, a4, a5) _Py_Assign(a0, a1, a2, a3, a4, a5)
+stmt_ty _Py_Assign(asdl_seq * targets, expr_ty value, expr_ty type, int lineno,
+                   int col_offset, PyArena *arena);
 #define AugAssign(a0, a1, a2, a3, a4, a5) _Py_AugAssign(a0, a1, a2, a3, a4, a5)
 stmt_ty _Py_AugAssign(expr_ty target, operator_ty op, expr_ty value, int
                       lineno, int col_offset, PyArena *arena);

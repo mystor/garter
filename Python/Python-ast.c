@@ -74,9 +74,11 @@ static char *Delete_fields[]={
     "targets",
 };
 static PyTypeObject *Assign_type;
+_Py_IDENTIFIER(type);
 static char *Assign_fields[]={
     "targets",
     "value",
+    "type",
 };
 static PyTypeObject *AugAssign_type;
 _Py_IDENTIFIER(target);
@@ -434,7 +436,6 @@ static char *excepthandler_attributes[] = {
 };
 static PyObject* ast2obj_excepthandler(void*);
 static PyTypeObject *ExceptHandler_type;
-_Py_IDENTIFIER(type);
 static char *ExceptHandler_fields[]={
     "type",
     "name",
@@ -851,7 +852,7 @@ static int init_types(void)
     if (!Return_type) return 0;
     Delete_type = make_type("Delete", stmt_type, Delete_fields, 1);
     if (!Delete_type) return 0;
-    Assign_type = make_type("Assign", stmt_type, Assign_fields, 2);
+    Assign_type = make_type("Assign", stmt_type, Assign_fields, 3);
     if (!Assign_type) return 0;
     AugAssign_type = make_type("AugAssign", stmt_type, AugAssign_fields, 3);
     if (!AugAssign_type) return 0;
@@ -1334,8 +1335,8 @@ Delete(asdl_seq * targets, int lineno, int col_offset, PyArena *arena)
 }
 
 stmt_ty
-Assign(asdl_seq * targets, expr_ty value, int lineno, int col_offset, PyArena
-       *arena)
+Assign(asdl_seq * targets, expr_ty value, expr_ty type, int lineno, int
+       col_offset, PyArena *arena)
 {
     stmt_ty p;
     if (!value) {
@@ -1349,6 +1350,7 @@ Assign(asdl_seq * targets, expr_ty value, int lineno, int col_offset, PyArena
     p->kind = Assign_kind;
     p->v.Assign.targets = targets;
     p->v.Assign.value = value;
+    p->v.Assign.type = type;
     p->lineno = lineno;
     p->col_offset = col_offset;
     return p;
@@ -2679,6 +2681,11 @@ ast2obj_stmt(void* _o)
         value = ast2obj_expr(o->v.Assign.value);
         if (!value) goto failed;
         if (_PyObject_SetAttrId(result, &PyId_value, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        value = ast2obj_expr(o->v.Assign.type);
+        if (!value) goto failed;
+        if (_PyObject_SetAttrId(result, &PyId_type, value) == -1)
             goto failed;
         Py_DECREF(value);
         break;
@@ -4401,6 +4408,7 @@ obj2ast_stmt(PyObject* obj, stmt_ty* out, PyArena* arena)
     if (isinstance) {
         asdl_seq* targets;
         expr_ty value;
+        expr_ty type;
 
         if (_PyObject_HasAttrId(obj, &PyId_targets)) {
             int res;
@@ -4437,7 +4445,17 @@ obj2ast_stmt(PyObject* obj, stmt_ty* out, PyArena* arena)
             PyErr_SetString(PyExc_TypeError, "required field \"value\" missing from Assign");
             return 1;
         }
-        *out = Assign(targets, value, lineno, col_offset, arena);
+        if (exists_not_none(obj, &PyId_type)) {
+            int res;
+            tmp = _PyObject_GetAttrId(obj, &PyId_type);
+            if (tmp == NULL) goto failed;
+            res = obj2ast_expr(tmp, &type, arena);
+            if (res != 0) goto failed;
+            Py_CLEAR(tmp);
+        } else {
+            type = NULL;
+        }
+        *out = Assign(targets, value, type, lineno, col_offset, arena);
         if (*out == NULL) goto failed;
         return 0;
     }
