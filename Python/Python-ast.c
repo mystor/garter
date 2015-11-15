@@ -2587,7 +2587,12 @@ ast2obj_stmt(void* _o)
         if (_PyObject_SetAttrId(result, &PyId_decorator_list, value) == -1)
             goto failed;
         Py_DECREF(value);
+
+#ifndef ENABLE_ANNOTATIONS
+        value = ast2obj_expr(NULL);
+#else
         value = ast2obj_expr(o->v.FunctionDef.returns);
+#endif
         if (!value) goto failed;
         if (_PyObject_SetAttrId(result, &PyId_returns, value) == -1)
             goto failed;
@@ -2617,7 +2622,12 @@ ast2obj_stmt(void* _o)
         if (_PyObject_SetAttrId(result, &PyId_decorator_list, value) == -1)
             goto failed;
         Py_DECREF(value);
+
+#ifndef ENABLE_ANNOTATIONS
+        value = ast2obj_expr(NULL);
+#else
         value = ast2obj_expr(o->v.AsyncFunctionDef.returns);
+#endif
         if (!value) goto failed;
         if (_PyObject_SetAttrId(result, &PyId_returns, value) == -1)
             goto failed;
@@ -3740,7 +3750,13 @@ ast2obj_arg(void* _o)
     if (_PyObject_SetAttrId(result, &PyId_arg, value) == -1)
         goto failed;
     Py_DECREF(value);
+
+#ifndef ENABLE_ANNOTATIONS
+    value = ast2obj_expr(NULL);
+#else
     value = ast2obj_expr(o->annotation);
+#endif
+
     if (!value) goto failed;
     if (_PyObject_SetAttrId(result, &PyId_annotation, value) == -1)
         goto failed;

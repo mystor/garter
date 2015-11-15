@@ -1557,6 +1557,7 @@ compiler_visit_kwonlydefaults(struct compiler *c, asdl_seq *kwonlyargs,
     return default_count;
 }
 
+#ifdef ENABLE_ANNOTATIONS
 static int
 compiler_visit_argannotation(struct compiler *c, identifier id,
     expr_ty annotation, PyObject *names)
@@ -1592,11 +1593,15 @@ compiler_visit_argannotations(struct compiler *c, asdl_seq* args,
     }
     return 1;
 }
+#endif
 
 static int
 compiler_visit_annotations(struct compiler *c, arguments_ty args,
                            expr_ty returns)
 {
+#ifndef ENABLE_ANNOTATIONS
+    return 0;
+#else
     /* Push arg annotations and a list of the argument names. Return the #
        of items pushed. The expressions are evaluated out-of-order wrt the
        source code.
@@ -1663,6 +1668,7 @@ compiler_visit_annotations(struct compiler *c, arguments_ty args,
 error:
     Py_DECREF(names);
     return -1;
+#endif
 }
 
 static int
@@ -1686,7 +1692,11 @@ compiler_function(struct compiler *c, stmt_ty s, int is_async)
         assert(s->kind == AsyncFunctionDef_kind);
 
         args = s->v.AsyncFunctionDef.args;
+#ifndef ENABLE_ANNOTATIONS
+        returns = NULL;
+#else
         returns = s->v.AsyncFunctionDef.returns;
+#endif
         decos = s->v.AsyncFunctionDef.decorator_list;
         name = s->v.AsyncFunctionDef.name;
         body = s->v.AsyncFunctionDef.body;
@@ -1696,7 +1706,11 @@ compiler_function(struct compiler *c, stmt_ty s, int is_async)
         assert(s->kind == FunctionDef_kind);
 
         args = s->v.FunctionDef.args;
+#ifndef ENABLE_ANNOTATIONS
+        returns = NULL;
+#else
         returns = s->v.FunctionDef.returns;
+#endif
         decos = s->v.FunctionDef.decorator_list;
         name = s->v.FunctionDef.name;
         body = s->v.FunctionDef.body;
