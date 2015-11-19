@@ -127,6 +127,12 @@ PyAPI_FUNC(PyObject *) Py_CompileStringObject(
     PyObject *filename, int start,
     PyCompilerFlags *flags,
     int optimize);
+PyAPI_FUNC(PyObject *) Garter_CompileStringObject(
+    const char *str,
+    PyObject *filename, int start,
+    PyCompilerFlags *flags,
+    int optimize,
+    PyObject *global_scope);
 #endif
 PyAPI_FUNC(struct symtable *) Py_SymtableString(
     const char *str,

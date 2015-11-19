@@ -9,6 +9,8 @@
 #include "asdl.h"
 #include "ast.h"
 
+#include "garter.h"
+
 #include <ctype.h>
 
 #ifdef HAVE_LANGINFO_H
@@ -762,6 +764,154 @@ error:
 finally:
     Py_DECREF(filename);
     return result;
+}
+
+/*[clinic input]
+garter_compile as builtin_garter_compile
+
+    source: object
+    filename: object(converter="PyUnicode_FSDecoder")
+    mode: str
+    flags: int = 0
+    dont_inherit: int(c_default="0") = False
+    optimize: int = -1
+    global_scope: object = None
+
+Compile source into a code object that can be executed by exec() or eval().
+
+The source which is compiled will be analyzed by garter's code analysis
+in order to ensure its "correctness".
+
+The source code may represent a Python module, statement or expression.
+The filename will be used for run-time error messages.
+The mode must be 'exec' to compile a module, 'single' to compile a
+single (interactive) statement, or 'eval' to compile an expression.
+The flags argument, if present, controls which future statements influence
+the compilation of the code.
+The dont_inherit argument, if true, stops the compilation inheriting
+the effects of any future statements in effect in the code calling
+compile; if absent or false these statements do influence the compilation,
+in addition to any features explicitly specified.
+[clinic start generated code]*/
+
+static PyObject *
+builtin_garter_compile_impl(PyModuleDef *module, PyObject *source,
+                            PyObject *filename, const char *mode, int flags,
+                            int dont_inherit, int optimize,
+                            PyObject *global_scope)
+/*[clinic end generated code: output=fc2d467f34177737 input=ce7a4d09f4666c29]*/
+{
+    PyObject *source_copy;
+    const char *str;
+    int compile_mode = -1;
+    int is_ast;
+    PyCompilerFlags cf;
+    int start[] = {Py_file_input, Py_eval_input, Py_single_input};
+    PyObject *result;
+
+    cf.cf_flags = flags | PyCF_SOURCE_IS_UTF8;
+
+    /* create a default global scope object if one isn't provided */
+    Py_INCREF(global_scope);
+    if (global_scope == Py_None) {
+      Py_DECREF(global_scope);
+      global_scope = Garter_NewGlobalScope();
+    }
+
+    if (flags &
+        ~(PyCF_MASK | PyCF_MASK_OBSOLETE | PyCF_DONT_IMPLY_DEDENT | PyCF_ONLY_AST))
+    {
+        PyErr_SetString(PyExc_ValueError,
+                        "compile(): unrecognised flags");
+        goto error;
+    }
+    /* XXX Warn if (supplied_flags & PyCF_MASK_OBSOLETE) != 0? */
+
+    if (optimize < -1 || optimize > 2) {
+        PyErr_SetString(PyExc_ValueError,
+                        "compile(): invalid optimize value");
+        goto error;
+    }
+
+    if (!dont_inherit) {
+        PyEval_MergeCompilerFlags(&cf);
+    }
+
+    if (strcmp(mode, "exec") == 0)
+        compile_mode = 0;
+    else if (strcmp(mode, "eval") == 0)
+        compile_mode = 1;
+    else if (strcmp(mode, "single") == 0)
+        compile_mode = 2;
+    else {
+        PyErr_SetString(PyExc_ValueError,
+                        "compile() mode must be 'exec', 'eval' or 'single'");
+        goto error;
+    }
+
+    is_ast = PyAST_Check(source);
+    if (is_ast == -1)
+        goto error;
+    if (is_ast) {
+        if (flags & PyCF_ONLY_AST) {
+            Py_INCREF(source);
+            result = source;
+        }
+        else {
+            PyArena *arena;
+            mod_ty mod;
+
+            arena = PyArena_New();
+            if (arena == NULL)
+                goto error;
+            mod = PyAST_obj2mod(source, arena, compile_mode);
+            if (mod == NULL) {
+                PyArena_Free(arena);
+                goto error;
+            }
+            if (!PyAST_Validate(mod)) {
+                PyArena_Free(arena);
+                goto error;
+            }
+            if (!Garter_Validate(mod, filename, global_scope)) {
+                PyArena_Free(arena);
+                goto error;
+            }
+            result = (PyObject*)PyAST_CompileObject(mod, filename,
+                                                    &cf, optimize, arena);
+            PyArena_Free(arena);
+        }
+        goto finally;
+    }
+
+    str = source_as_string(source, "compile", "string, bytes or AST", &cf, &source_copy);
+    if (str == NULL)
+        goto error;
+
+    result = Garter_CompileStringObject(str, filename, start[compile_mode],
+                                        &cf, optimize, global_scope);
+    Py_XDECREF(source_copy);
+    goto finally;
+
+error:
+    result = NULL;
+finally:
+    Py_DECREF(filename);
+    Py_DECREF(global_scope);
+    return result;
+}
+
+/*[clinic input]
+garter_newglobalscope as builtin_garter_newglobalscope
+
+Create a new global scope object to pass to garter_compile.
+[clinic start generated code]*/
+
+static PyObject *
+builtin_garter_newglobalscope_impl(PyModuleDef *module)
+/*[clinic end generated code: output=0e8a1020d4873055 input=42b6dd2c67cccc42]*/
+{
+  return Garter_NewGlobalScope();
 }
 
 /* AC: cannot convert yet, as needs PEP 457 group support in inspect */
@@ -2595,6 +2745,8 @@ static PyMethodDef builtin_methods[] = {
     BUILTIN_CALLABLE_METHODDEF
     BUILTIN_CHR_METHODDEF
     BUILTIN_COMPILE_METHODDEF
+    BUILTIN_GARTER_COMPILE_METHODDEF
+    BUILTIN_GARTER_NEWGLOBALSCOPE_METHODDEF
     BUILTIN_DELATTR_METHODDEF
     {"dir",             builtin_dir,        METH_VARARGS, dir_doc},
     BUILTIN_DIVMOD_METHODDEF

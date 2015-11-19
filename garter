@@ -1,0 +1,7 @@
+#!./python
+import sys
+
+with open(sys.argv[1], 'r') as f:
+    x = f.read()
+    code = garter_compile(x, sys.argv[1], "exec")
+    exec(code)

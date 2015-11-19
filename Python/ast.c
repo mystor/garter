@@ -338,8 +338,9 @@ validate_stmt(stmt_ty stmt)
     case Delete_kind:
         return validate_assignlist(stmt->v.Delete.targets, Del);
     case Assign_kind:
+        /* MAYBE CHECK type TOO? */
         return validate_assignlist(stmt->v.Assign.targets, Store) &&
-            validate_expr(stmt->v.Assign.value, Load);
+            validate_expr(stmt->v.Assign.value, Load); 
     case AugAssign_kind:
         return validate_expr(stmt->v.AugAssign.target, Store) &&
             validate_expr(stmt->v.AugAssign.value, Load);
@@ -2939,7 +2940,7 @@ ast_for_expr_stmt(struct compiling *c, const node *n)
             expression = ast_for_expr(c, value);
         if (!expression)
             return NULL;
-        return Assign(targets, expression, 0, LINENO(n), n->n_col_offset, c->c_arena);
+        return Assign(targets, expression, type, LINENO(n), n->n_col_offset, c->c_arena);
     }
 }
 

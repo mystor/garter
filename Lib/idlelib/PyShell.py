@@ -15,6 +15,7 @@ import io
 import linecache
 from code import InteractiveInterpreter
 from platform import python_version, system
+from gartercodeop import CommandCompiler
 
 try:
     from tkinter import *
@@ -386,6 +387,7 @@ class ModifiedInterpreter(InteractiveInterpreter):
         self.tkconsole = tkconsole
         locals = sys.modules['__main__'].__dict__
         InteractiveInterpreter.__init__(self, locals=locals)
+        self.compile = CommandCompiler() # Use the garter command compiler
         self.save_warnings_filters = None
         self.restarting = False
         self.subprocess_arglist = None
@@ -501,6 +503,7 @@ class ModifiedInterpreter(InteractiveInterpreter):
             # reload remote debugger breakpoints for all PyShellEditWindows
             debug.load_breakpoints()
         self.compile.compiler.flags = self.original_compiler_flags
+        self.compile.compiler.global_scope = garter_newglobalscope()
         self.restarting = False
         return self.rpcclt
 
@@ -642,7 +645,8 @@ class ModifiedInterpreter(InteractiveInterpreter):
             with tokenize.open(filename) as fp:
                 source = fp.read()
         try:
-            code = compile(source, filename, "exec")
+            print("source_execfile:", source)
+            code = garter_compile(source, filename, "exec")
         except (OverflowError, SyntaxError):
             self.tkconsole.resetoutput()
             print('*** Error in script or command!\n'

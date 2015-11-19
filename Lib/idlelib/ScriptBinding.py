@@ -97,7 +97,8 @@ class ScriptBinding:
         text.tag_remove("ERROR", "1.0", "end")
         try:
             # If successful, return the compiled code
-            return compile(source, filename, "exec")
+            print("source:", source)
+            return garter_compile(source, filename, "exec")
         except (SyntaxError, OverflowError, ValueError) as value:
             msg = getattr(value, 'msg', '') or value or "<no detail available>"
             lineno = getattr(value, 'lineno', '') or 1
