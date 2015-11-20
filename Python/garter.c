@@ -119,6 +119,34 @@ GarterType_Meta(PyObject *obj)
     return ((GarterType *)obj)->meta;
 }
 
+static GBoolean
+GarterType_IsComplete(PyObject *obj)
+{
+    if (!obj)
+        return GFalse;
+
+    PyObject *meta = GarterType_Meta(obj);
+    switch (GarterType_Kind(obj)) {
+    case GT_LIST: {
+        return GarterType_IsComplete(meta);
+    }
+    case GT_DICT: {
+        if (!meta)
+            return GFalse;
+        assert(PyTuple_Check(meta));
+        return GarterType_IsComplete(PyTuple_GetItem(meta, 0)) &&
+            GarterType_IsComplete(PyTuple_GetItem(meta, 1));
+    }
+    case GT_CLASS: {
+        if (!meta)
+            return GFalse;
+        return GTrue;
+    }
+    default:
+        return GTrue;
+    }
+}
+
 static void
 GarterType_LateBindMeta(PyObject *obj, PyObject *meta)
 {
@@ -1069,6 +1097,9 @@ validate_assign_stmt(PyObject *scope, stmt_ty stmt, GBoolean groot)
             if (!target_type) {
                 goto fail;
             }
+        }
+        if (!GarterType_IsComplete(target_type)) {
+            Garter_ERROR(stmt, "Incomplete type in declaration");
         }
 
         if (!validate_decl_target(scope, target, target_type)) {
