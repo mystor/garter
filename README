@@ -1,3 +1,38 @@
+Garter
+======
+
+Garter is based on Python version 3.6.0 alpha 1. It was created as an
+undergraduate thesis by Michael Layzell for the requirements of CISC 500 at
+Queen's University.
+
+Garter is a strongly typed minimal subset of Python version 3.6.0 which is
+intended to be used for learning purposes. Most features have been disabled
+to simplify the learning process.
+
+Build Instructions
+------------------
+
+See python documentation (below) for build instructions. It is recommended to
+not install Garter, as it will override an existing Python installation, which
+is probably not intended. Work may be done in the future to avoid this behavior.
+
+Usage
+-----
+
+The default python interpereter is currently not modified to use Garter's analysis.
+Instead, IDLE has been modified to perform the analysis on code run in the REPL or
+through the Run Module functionality.
+
+To launch idle:
+
+    ./python -m idlelib
+
+Work will be done in time to bring this functionality to the executable itself,
+however, this will be more difficult, as normal python code must still be correctly
+executed.
+
+=== PYTHON README FOLLOWS ===
+
 This is Python version 3.6.0 alpha 1
 ====================================
 
