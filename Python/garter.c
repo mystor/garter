@@ -14,8 +14,7 @@ typedef int GBoolean;
 */
 
 typedef enum _GarterTypeKind {
-    GT_INT,
-    GT_FLOAT,
+    GT_NUM,
     GT_BOOL,
     GT_STR,
     GT_DICT,
@@ -40,9 +39,44 @@ typedef struct _GarterType
 } GarterType;
 
 static void
-GarterType_dealloc(GarterType* type)
+GarterType_dealloc(GarterType *type)
 {
     Py_XDECREF(type->meta);
+}
+
+static PyObject *
+GarterType_str(GarterType *type)
+{
+    PyObject *res = NULL;
+    switch (type->kind) {
+    case GT_NUM: {
+        res = PyUnicode_FromString("num");
+        break;
+    }
+    case GT_BOOL: {
+        res = PyUnicode_FromString("bool");
+        break;
+    }
+    case GT_STR: {
+        res = PyUnicode_FromString("str");
+        break;
+    }
+    case GT_DICT: {
+        res = PyObject_Str(type->meta);
+        break;
+    }
+    case GT_LIST: {
+        res = PyObject_Str(type->meta);
+        break;
+    }
+    case GT_CLASS: {
+        // XXX: FIXME
+        res = PyUnicode_FromString("CLASS");
+        break;
+    }
+    }
+    assert(res);
+    return res;
 }
 
 PyTypeObject GarterType_Type = {
@@ -62,7 +96,7 @@ PyTypeObject GarterType_Type = {
     0,                                  /* tp_as_mapping */
     0,                                  /* tp_hash */
     0,                                  /* tp_call */
-    0,                                  /* tp_str */
+    (reprfunc)GarterType_str,           /* tp_str */
     PyObject_GenericGetAttr,            /* tp_getattro */
     0,                                  /* tp_setattro */
     0,                                  /* tp_as_buffer */
@@ -218,17 +252,11 @@ GarterType_Equal(PyObject *a, PyObject *b)
   Primitive Types
 */
 
-static GarterType _GarterType_INT = {
+static GarterType _GarterType_NUM = {
     PyObject_HEAD_INIT(&GarterType_Type)
-    GT_INT, NULL
+    GT_NUM, NULL
 };
-static PyObject *GarterType_INT = (PyObject *) &_GarterType_INT;
-
-static GarterType _GarterType_FLOAT = {
-    PyObject_HEAD_INIT(&GarterType_Type)
-    GT_FLOAT, NULL
-};
-static PyObject *GarterType_FLOAT = (PyObject *) &_GarterType_FLOAT;
+static PyObject *GarterType_NUM = (PyObject *) &_GarterType_NUM;
 
 static GarterType _GarterType_BOOL= {
     PyObject_HEAD_INIT(&GarterType_Type)
@@ -397,10 +425,23 @@ _GarterScope_Error(PyObject *scope,
     do {                                                           \
         PyObject *__vf_errmsg = PyUnicode_FromFormat(__VA_ARGS__); \
         _GarterScope_Error(scope,                                  \
-                           NODE->lineno, NODE->col_offset,         \
+                           (NODE)->lineno, (NODE)->col_offset,     \
                            __vf_errmsg);                           \
         Py_DECREF(__vf_errmsg);                                    \
         goto fail; /* functions must define fail label */          \
+    } while (0)
+
+#define Garter_INTERNAL_ERROR(NODE, REASON)                       \
+    do {                                                          \
+        PyObject *__vs_errmsg =                                   \
+            PyUnicode_FromFormat("Internal Error at %s:%d "       \
+                                 "(" REASON ")",                  \
+                                 __FILE__, __LINE__);             \
+        _GarterScope_Error(scope,                                 \
+                           (NODE)->lineno, (NODE)->col_offset,    \
+                           __vf_errmsg);                          \
+        Py_DECREF(__vf_errmsg);                                   \
+        goto fail; /* functions must define fail label */         \
     } while (0)
 
 #define UNIMPLEMENTED(NODE) Garter_ERROR(NODE,                  \
@@ -537,12 +578,9 @@ validate_type(PyObject *scope, expr_ty expr)
         PyUnicode_READY(name);
 
         /* XXX: Also handle class types */
-        if (PyUnicode_CompareWithASCIIString(name, "int") == 0) {
-            Py_INCREF(GarterType_INT);
-            return GarterType_INT;
-        } else if (PyUnicode_CompareWithASCIIString(name, "float") == 0) {
-            Py_INCREF(GarterType_FLOAT);
-            return GarterType_FLOAT;
+        if (PyUnicode_CompareWithASCIIString(name, "num") == 0) {
+            Py_INCREF(GarterType_NUM);
+            return GarterType_NUM;
         } else if (PyUnicode_CompareWithASCIIString(name, "str") == 0) {
             Py_INCREF(GarterType_STR);
             return GarterType_STR;
@@ -622,6 +660,7 @@ finally:
     Py_XDECREF(value_type);
     return ret;
 }
+
 static PyObject * /* owned */
 validate_if_expr(PyObject *scope, expr_ty expr)
 {
@@ -687,12 +726,14 @@ validate_list_expr(PyObject *scope, expr_ty expr)
                 goto fail;
             continue;
         }
-        
+
         if (!GarterType_Equal(this_type, elt_type)) {
             Garter_ERROR(expr,
-                         "Arrays must all contain elements of the same "
-                         "type. Element %d contained an inconsistent type",
-                         i);
+                         "=== Mismatched Types ===\n"
+                         "Arrays must contain consistent element types.\n"
+                         "Instead, the first element is `%V`, "
+                         "and the %d element is `%V`",
+                         elt_type, i, this_type);
         }
 
         Py_DECREF(this_type);
@@ -712,61 +753,81 @@ finally:
     return ret;
 }
 
-#if 0
 static PyObject * /* owned */
 validate_dict_expr(PyObject *scope, expr_ty expr)
 {
     PyObject *ret = NULL;
 
-    /* XXX: Support the empty list literal (delayed type inference?) */
-    asdl_seq *seq = expr->v.List.elts;
-    PyObject *elt_type = NULL, *this_type = NULL;
+    asdl_seq *keys = expr->v.Dict.keys;
+    asdl_seq *vals = expr->v.Dict.values;
+    assert(asdl_seq_LEN(keys) == asdl_seq_LEN(vals));
+    PyObject *key_type = NULL, *val_type = NULL;
+    PyObject *this_key_type = NULL, *this_val_type = NULL;
+    PyObject *meta = NULL;
 
-    for (int i = 0; i < asdl_seq_LEN(seq); i++) {
-        expr_ty elt = (expr_ty)asdl_seq_GET(seq, i);
-        this_type = validate_expr(scope, elt, GFalse);
-        if (!elt_type) {
-            elt_type = this_type; /* transfer ownership */
-            if (!elt_type)
-                goto fail;
+    for (int i = 0; i < asdl_seq_LEN(keys); i++) {
+        expr_ty key = (expr_ty)asdl_seq_GET(keys, i);
+        expr_ty val = (expr_ty)asdl_seq_GET(vals, i);
+
+        this_key_type = validate_expr(scope, key, GFalse);
+        if (!this_key_type) {
+            goto fail;
+        }
+        this_val_type = validate_expr(scope, val, GFalse);
+        if (!this_val_type) {
+            goto fail;
+        }
+
+        if (!key_type) {
+            key_type = this_key_type; /* transfer ownership */
+            val_type = this_val_type; /* transfer ownership */
+            this_key_type = NULL;
+            this_val_type = NULL;
             continue;
         }
-        
-        if (!GarterType_Equal(this_type, elt_type)) {
-            Garter_ERROR(expr,
-                         "Arrays must all contain elements of the same "
-                         "type. Element %d contained an inconsistent type",
-                         i);
+
+        if (!GarterType_Equal(this_key_type, key_type)) {
+            /* XXX: 1 => 1st, 2 => 2nd etc... */
+            Garter_ERROR(key,
+                         "=== Mismatched Types ===\n"
+                         "Dicts must contain consistent key types.\n"
+                         "Instead, the first key is `%V`, "
+                         "and the %d key is `%V`");
         }
 
-        Py_DECREF(this_type);
-        this_type = NULL;
+        if (!GarterType_Equal(this_val_type, val_type)) {
+            Garter_ERROR(val,
+                         "=== Mismatched Types ===\n"
+                         "Dicts must contain consistent value types.\n"
+                         "Instead, the first value is `%V`, "
+                         "and the %d value is `%V`");
+        }
+
+        Py_DECREF(this_key_type);
+        Py_DECREF(this_val_type);
+        this_key_type = NULL;
+        this_val_type = NULL;
     }
 
-    if (!elt_type) {
-        Garter_ERROR(expr, "Empty list literals are not yet supported");
+    if (key_type && val_type) {
+        meta = PyTuple_Pack(2, key_type, val_type);
     }
-    
-    ret = GarterType_New(GT_LIST, elt_type);
+
+    /* meta may be null here - late-bound empty dict */
+    ret = GarterType_New(GT_DICT, meta);
     goto finally;
 
 fail:
     Py_XDECREF(ret);
     ret = NULL;
 finally:
-    Py_XDECREF(elt_type);
-    Py_XDECREF(this_type);
+    Py_XDECREF(key_type);
+    Py_XDECREF(val_type);
+    Py_XDECREF(this_key_type);
+    Py_XDECREF(this_val_type);
+    Py_XDECREF(meta);
     return ret;
 }
-#else
-static PyObject * /* owned */
-validate_dict_expr(PyObject *scope, expr_ty expr)
-{
-    Garter_ERROR(expr, "ASD");
-fail:
-    return NULL;
-}
-#endif
 
 static PyObject * /* owned */
 validate_unaryop_expr(PyObject *scope, expr_ty expr)
@@ -784,28 +845,36 @@ validate_unaryop_expr(PyObject *scope, expr_ty expr)
 
     switch (op) {
     case Invert: {
-        if (operand_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        }
-        Garter_ERROR(expr, "Invalid operand to unary `~` operator");
+        Garter_ERROR(expr,
+                     "=== Invalid Operator ===\n"
+                     "The unary `~` operator is not supported by garter");
     }
     case Not: {
         if (operand_kind == GT_BOOL) {
             INCREF_RET_FINALLY(GarterType_BOOL);
         }
-        Garter_ERROR(expr, "Invalid operand to unary `not` operator");
+        Garter_ERROR(expr,
+                     "=== Invalid Type ===\n"
+                     "The operand to the unary `not` operator must be `bool`.\n"
+                     "Instead, the operand is a `%V`", operand);
     }
     case UAdd: {
-        if (operand_kind == GT_INT || operand_kind == GT_FLOAT) {
-            INCREF_RET_FINALLY(operand_type);
+        if (operand_kind == GT_NUM) {
+            INCREF_RET_FINALLY(GarterType_NUM);
         }
-        Garter_ERROR(expr, "Invalid operand to unary `+` operator");
+        Garter_ERROR(expr,
+                     "=== Invalid Type ===\n"
+                     "The operand to the unary `+` operator must be `num`.\n"
+                     "Instead, the operand is a `%V`", operand);
     }
     case USub: {
-        if (operand_kind == GT_INT || operand_kind == GT_FLOAT) {
-            INCREF_RET_FINALLY(operand_type);
+        if (operand_kind == GT_NUM) {
+            INCREF_RET_FINALLY(GarterType_NUM);
         }
-        Garter_ERROR(expr, "Invalid operand to unary `-` operator");
+        Garter_ERROR(expr,
+                     "=== Invalid Type ===\n"
+                     "The operand to the unary `-` operator must be `num`.\n"
+                     "Instead, the operand is a `%V`", operand);
     }
     default:
         assert(0);
@@ -836,117 +905,86 @@ validate_binop_expr(PyObject *scope, expr_ty expr)
         goto fail;
 
     assert(GarterType_Check(lhs_type) && GarterType_Check(rhs_type));
-    GarterTypeKind lhs_kind = GarterType_Kind(lhs_type);
-    GarterTypeKind rhs_kind = GarterType_Kind(rhs_type);
 
+    const char *invalid_operator = "=== Invalid Operator ===\n"
+        "The `%s` operator is not supported by garter";
+    const char *invalid_type = "=== Invalid Type ===\n"
+        "Operands to the `%s` operator must be %s\n"
+        "Instead, the operand is a `%V`";
+    const char *mismatched_types = "=== Mismatched Types ===\n"
+        "Operands to the `%s` operator must be of the same type.\n"
+        "Instead, the left side is `%V`, and the right side is `%V`";
+
+    GarterTypeKind operand_kind = GarterType_Kind(lhs_type);
+    const char *op_str = NULL;
     switch (op) {
     case Add: {
-        if (lhs_kind == GT_INT && rhs_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        } else if ((lhs_kind == GT_FLOAT && rhs_kind == GT_FLOAT) ||
-                   (lhs_kind == GT_INT && rhs_kind == GT_FLOAT) ||
-                   (lhs_kind == GT_FLOAT && rhs_kind == GT_INT)) {
-            INCREF_RET_FINALLY(GarterType_FLOAT);
-        } else if (lhs_kind == GT_STR && rhs_kind == GT_STR) {
-            INCREF_RET_FINALLY(GarterType_STR);
-        } else if (lhs_kind == GT_LIST &&
-                   GarterType_Equal(lhs_type, rhs_type)) {
-            INCREF_RET_FINALLY(lhs_type);
+        if (operand_kind != GT_NUM &&
+            operand_kind != GT_STR &&
+            operand_kind != GT_LIST) {
+            Garter_ERROR(expr, invalid_type, "+", "`num`, `str`, or `[_]`", lhs_type);
         }
-        Garter_ERROR(expr, "Invalid type operands to `+` operator");
+        if (!GarterType_Equal(lhs_type, rhs_type)) {
+            Garter_ERROR(expr, mismatched_types, "+", lhs_type, rhs_type);
+        }
+        INCREF_RET_FINALLY(lhs_type);
     }
     case Sub: {
-        if (lhs_kind == GT_INT && rhs_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        } else if ((lhs_kind == GT_FLOAT && rhs_kind == GT_FLOAT) ||
-                   (lhs_kind == GT_INT && rhs_kind == GT_FLOAT) ||
-                   (lhs_kind == GT_FLOAT && rhs_kind == GT_INT)) {
-            INCREF_RET_FINALLY(GarterType_FLOAT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `-` operator");
+        op_str = "-";
+        break;
     }
     case Mult: {
-        if (lhs_kind == GT_INT && rhs_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        } else if ((lhs_kind == GT_FLOAT && rhs_kind == GT_FLOAT) ||
-                   (lhs_kind == GT_INT && rhs_kind == GT_FLOAT) ||
-                   (lhs_kind == GT_FLOAT && rhs_kind == GT_INT)) {
-            INCREF_RET_FINALLY(GarterType_FLOAT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `-` operator");
-    }
-    case MatMult: {
-        Garter_ERROR(expr,
-                     "Matrix multiplication operator `@` is not "
-                     "supported by Garter");
+        op_str = "*";
+        break;
     }
     case Div: {
-        if ((lhs_kind == GT_INT || lhs_kind == GT_FLOAT) &&
-            (rhs_kind == GT_INT || rhs_kind == GT_FLOAT)) {
-            INCREF_RET_FINALLY(GarterType_FLOAT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `/` operator");
+        op_str = "/";
+        break;
     }
     case Mod: {
-        if (lhs_kind == GT_INT && rhs_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        } else if ((lhs_kind == GT_FLOAT && rhs_kind == GT_FLOAT) ||
-                   (lhs_kind == GT_INT && rhs_kind == GT_FLOAT) ||
-                   (lhs_kind == GT_FLOAT && rhs_kind == GT_INT)) {
-            INCREF_RET_FINALLY(GarterType_FLOAT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `%` operator");
+        op_str = "%";
+        break;
     }
     case Pow: {
-        if (lhs_kind == GT_INT && rhs_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        } else if ((lhs_kind == GT_FLOAT && rhs_kind == GT_FLOAT) ||
-                   (lhs_kind == GT_INT && rhs_kind == GT_FLOAT) ||
-                   (lhs_kind == GT_FLOAT && rhs_kind == GT_INT)) {
-            INCREF_RET_FINALLY(GarterType_FLOAT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `**` operator");
-    }
-    case LShift: {
-        if (lhs_kind == GT_INT && rhs_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `<<` operator");
-    }
-    case RShift: {
-        if (lhs_kind == GT_INT && rhs_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `>>` operator");
-    }
-    case BitOr: {
-        if (lhs_kind == GT_INT && rhs_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `|` operator");
-    }
-    case BitXor: {
-        if (lhs_kind == GT_INT && rhs_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `^` operator");
-    }
-    case BitAnd: {
-        if (lhs_kind == GT_INT && rhs_kind == GT_INT) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `&` operator");
+        op_str = "**";
+        break;
     }
     case FloorDiv: {
-        if ((lhs_kind == GT_INT || lhs_kind == GT_FLOAT) &&
-            (rhs_kind == GT_INT || rhs_kind == GT_FLOAT)) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        }
-        Garter_ERROR(expr, "Invalid type operands to `//` operator");
+        op_str = "//";
+        break;
+    }
+    case MatMult: {
+        Garter_ERROR(expr, invalid_operator, "@");
+    }
+    case LShift: {
+        Garter_ERROR(expr, invalid_operator, "<<");
+    }
+    case RShift: {
+        Garter_ERROR(expr, invalid_operator, ">>");
+    }
+    case BitOr: {
+        Garter_ERROR(expr, invalid_operator, "|");
+    }
+    case BitXor: {
+        Garter_ERROR(expr, invalid_operator, "^");
+    }
+    case BitAnd: {
+        Garter_ERROR(expr, invalid_operator, "&");
     }
     default:
         assert(0);
     }
+
+    assert(op_str);
+    /* In the cases which fall through to here, we need to check that both
+       arguments are num, and then return the number type */
+    if (operand_kind != GT_NUM) {
+        Garter_ERROR(expr, invalid_type, op_str, "`num`", lhs_type);
+    }
+    if (!GarterType_Equal(lhs_type, rhs_type)) {
+        Garter_ERROR(expr, mismatched_types, op_str, lhs_type, rhs_type);
+    }
+    INCREF_RET_FINALLY(lhs_type);
 
 fail:
     ret = NULL;
@@ -965,13 +1003,7 @@ validate_expr(PyObject *scope, expr_ty expr, GBoolean lvalue /* XXX use */)
 
     switch (expr->kind) {
     case Num_kind:
-        if (PyLong_Check(expr->v.Num.n)) {
-            INCREF_RET_FINALLY(GarterType_INT);
-        } else if (PyFloat_Check(expr->v.Num.n)) {
-            INCREF_RET_FINALLY(GarterType_FLOAT);
-        } else {
-            Garter_ERROR(expr, "Unrecognized number type!");
-        }
+        INCREF_RET_FINALLY(GarterType_NUM);
     case JoinedStr_kind: /* XXX: What is a JoinedStr? Is this correct? */
     case Str_kind:
         INCREF_RET_FINALLY(GarterType_STR);
@@ -1141,9 +1173,11 @@ validate_stmt(PyObject *scope, stmt_ty stmt, GBoolean sroot)
         UNIMPLEMENTED(stmt);
     case Return_kind:
         UNIMPLEMENTED(stmt);
-    case Assign_kind:
+    case Assign_kind: {
         return validate_assign_stmt(scope, stmt, sroot);
+    }
     case AugAssign_kind: {
+        /* XXX: This technique generates awful error messages */
         /* Translate into phony assign statement and BinOp expression */
         struct _expr e = {BinOp_kind};
         e.v.BinOp.op = stmt->v.AugAssign.op;
@@ -1215,14 +1249,24 @@ validate_stmts(PyObject *scope, asdl_seq *seq, GBoolean sroot)
         if (stmt) {
             if (!validate_stmt(scope, stmt, sroot))
                 return GFalse;
+
+            if (stmt->kind == Return_kind && i + 1 < asdl_seq_LEN(seq)) {
+                /* XXX: Could asdl_seq_GET(seq, i + 1) be null? */
+                Garter_ERROR((stmt_ty)asdl_seq_GET(seq, i + 1),
+                             "=== Unreachable Code ===\n"
+                             "This statement will never be executed, as it "
+                             "occurs after an unconditional return statement");
+            }
         }
         else {
-            PyErr_SetString(PyExc_ValueError,
-                            "None disallowed in statement list");
+            PyErr_SetString(PyExc_ValueError, "None disallowed in statement list");
             return GFalse;
         }
     }
     return GTrue;
+
+fail:
+    return GFalse;
 }
 
 static GBoolean
@@ -1308,4 +1352,6 @@ Garter_Validate(mod_ty mod, PyObject *filename, PyObject *scope)
 
     return success;
 }
+
+
 
