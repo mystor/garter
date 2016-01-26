@@ -175,76 +175,6 @@ exit:
     return return_value;
 }
 
-PyDoc_STRVAR(builtin_garter_compile__doc__,
-"garter_compile($module, /, source, filename, mode, flags=0,\n"
-"               dont_inherit=False, optimize=-1, global_scope=None)\n"
-"--\n"
-"\n"
-"Compile source into a code object that can be executed by exec() or eval().\n"
-"\n"
-"The source which is compiled will be analyzed by garter\'s code analysis\n"
-"in order to ensure its \"correctness\".\n"
-"\n"
-"The source code may represent a Python module, statement or expression.\n"
-"The filename will be used for run-time error messages.\n"
-"The mode must be \'exec\' to compile a module, \'single\' to compile a\n"
-"single (interactive) statement, or \'eval\' to compile an expression.\n"
-"The flags argument, if present, controls which future statements influence\n"
-"the compilation of the code.\n"
-"The dont_inherit argument, if true, stops the compilation inheriting\n"
-"the effects of any future statements in effect in the code calling\n"
-"compile; if absent or false these statements do influence the compilation,\n"
-"in addition to any features explicitly specified.");
-
-#define BUILTIN_GARTER_COMPILE_METHODDEF    \
-    {"garter_compile", (PyCFunction)builtin_garter_compile, METH_VARARGS|METH_KEYWORDS, builtin_garter_compile__doc__},
-
-static PyObject *
-builtin_garter_compile_impl(PyModuleDef *module, PyObject *source,
-                            PyObject *filename, const char *mode, int flags,
-                            int dont_inherit, int optimize,
-                            PyObject *global_scope);
-
-static PyObject *
-builtin_garter_compile(PyModuleDef *module, PyObject *args, PyObject *kwargs)
-{
-    PyObject *return_value = NULL;
-    static char *_keywords[] = {"source", "filename", "mode", "flags", "dont_inherit", "optimize", "global_scope", NULL};
-    PyObject *source;
-    PyObject *filename;
-    const char *mode;
-    int flags = 0;
-    int dont_inherit = 0;
-    int optimize = -1;
-    PyObject *global_scope = Py_None;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO&s|iiiO:garter_compile", _keywords,
-        &source, PyUnicode_FSDecoder, &filename, &mode, &flags, &dont_inherit, &optimize, &global_scope))
-        goto exit;
-    return_value = builtin_garter_compile_impl(module, source, filename, mode, flags, dont_inherit, optimize, global_scope);
-
-exit:
-    return return_value;
-}
-
-PyDoc_STRVAR(builtin_garter_newglobalscope__doc__,
-"garter_newglobalscope($module, /)\n"
-"--\n"
-"\n"
-"Create a new global scope object to pass to garter_compile.");
-
-#define BUILTIN_GARTER_NEWGLOBALSCOPE_METHODDEF    \
-    {"garter_newglobalscope", (PyCFunction)builtin_garter_newglobalscope, METH_NOARGS, builtin_garter_newglobalscope__doc__},
-
-static PyObject *
-builtin_garter_newglobalscope_impl(PyModuleDef *module);
-
-static PyObject *
-builtin_garter_newglobalscope(PyModuleDef *module, PyObject *Py_UNUSED(ignored))
-{
-    return builtin_garter_newglobalscope_impl(module);
-}
-
 PyDoc_STRVAR(builtin_divmod__doc__,
 "divmod($module, x, y, /)\n"
 "--\n"
@@ -730,4 +660,4 @@ builtin_issubclass(PyModuleDef *module, PyObject *args)
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=896a66f8122a4e8a input=a9049054013a1b77]*/
+/*[clinic end generated code: output=bec3399c0aee98d7 input=a9049054013a1b77]*/

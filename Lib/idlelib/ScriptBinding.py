@@ -99,7 +99,6 @@ class ScriptBinding:
         text.tag_remove("ERROR", "1.0", "end")
         try:
             # If successful, return the compiled code
-            print("source:", source)
             return garter.gcompile(source, filename, "exec")
         except (SyntaxError, OverflowError, ValueError) as value:
             msg = getattr(value, 'msg', '') or value or "<no detail available>"
