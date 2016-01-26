@@ -353,7 +353,7 @@ def validate_type(scope, expr):
 
         # XXX: Classes
         ensure_non_keyword(expr)
-        raise GarterError(expr, "Unrecognized type name {}", expr.id)
+        raise GarterError(expr, "Unrecognized type name {}".format(expr.id))
 
     if type(expr) == ast.Dict:
         if len(expr.keys) != 1 or len(expr.values) != 1:
@@ -634,13 +634,12 @@ def validate_if(scope, stmt):
     if not TY_BOOL.subsumes(test):
         raise GarterError(stmt.test,
                           "Test in if statement must have type bool")
-    # We 
     return validate_scoped(scope, stmt.body) and \
         validate_scoped(scope, stmt.orelse)
 
 
 def validate_print(scope, stmt):
-    pass
+    raise NotImplementedError()
 
 
 def validate_while(scope, stmt):
@@ -654,7 +653,19 @@ def validate_while(scope, stmt):
 
 
 def validate_range(scope, expr):
-    pass
+    if len(expr.keywords) > 0:
+        raise GarterError(expr, "Cannot use keyword arguments on range object")
+    if len(expr.args) > 3 or len(expr.args) < 1:
+        raise GarterError(expr, "Range takes 1-3 arguments")
+
+    result = TY_INT
+    for arg in expr.args:
+        ty = validate_expr(scope, arg)
+        if not TY_FLOAT.subsumes(ty):
+            raise GarterError(expr, "Arguments to Range must be either int or float")
+        if not TY_INT.subsumes(ty):
+            result = TY_FLOAT
+    return result
 
 
 def validate_for(scope, stmt):
@@ -696,6 +707,21 @@ def validate_assert(scope, stmt):
             raise GarterError(stmt, "Assert message must be str")
 
 
+def validate_return(scope, stmt):
+    if scope.func() == None:
+        raise GarterError(stmt, "Returns statement outside of function!")
+    returns = scope.func().ret
+    if stmt.value == None:
+        if returns != None:
+            raise GarterError(stmt, "Must return value of type {}".format(returns))
+    else:
+        ty = validate_expr(scope, stmt.value)
+        if returns == None:
+            raise GarterError(stmt, "Unexpected return value for function with no return value")
+        if not returns.subsumes(ty):
+            raise GarterError(stmt, "Expected return type {}, instead got {}".format(returns, ty))
+
+
 def validate_funcdef(scope, stmt):
     # Make sure we have a valid function name
     ensure_non_keyword(stmt.name)
@@ -733,7 +759,9 @@ def validate_funcdef(scope, stmt):
     def func_init():
         # XXX: Discover locals?
         inner._func = fty
-        validate_stmts(inner, stmt.body)
+        did_return = validate_stmts(inner, stmt.body)
+        if not did_return and returns == None:
+            raise GarterError(stmt, "Control flow reaches end of non-void function")
         # Flush all functions declared within this function!
         inner.flush()
     scope.declare(stmt.name, fty, mutable=False, init=func_init)
@@ -755,7 +783,8 @@ def validate_stmt(scope, stmt):
         raise NotImplementedError()
 
     elif kind is ast.Return:
-        raise NotImplementedError()
+        validate_return(scope, stmt)
+        return True
 
     elif kind is ast.Assign:
         validate_assign(scope, stmt)
