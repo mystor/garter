@@ -57,6 +57,7 @@ Compile():
 """
 
 import __future__
+import garter
 
 _features = [getattr(__future__, fname)
              for fname in __future__.all_feature_names]
@@ -99,7 +100,7 @@ def _maybe_compile(compiler, source, filename, symbol):
         raise err1
 
 def _compile(source, filename, symbol):
-    return garter_compile(source, filename, symbol, PyCF_DONT_IMPLY_DEDENT)
+    return garter.gcompile(source, filename, symbol, PyCF_DONT_IMPLY_DEDENT)
 
 def compile_command(source, filename="<input>", symbol="single"):
     r"""Compile a command and determine whether it is incomplete.
@@ -128,11 +129,11 @@ class Compile:
     with the statement in force."""
     def __init__(self):
         self.flags = PyCF_DONT_IMPLY_DEDENT
-        self.global_scope = garter_newglobalscope()
+        self.global_scope = garter.Scope()
 
     def __call__(self, source, filename, symbol):
         # XXX: Also "remember" scopes etc.
-        codeob = garter_compile(source, filename, symbol, self.flags, 1, -1, self.global_scope)
+        codeob = garter.gcompile(source, filename, symbol, self.flags, 1, -1, self.global_scope)
         for feature in _features:
             if codeob.co_flags & feature.compiler_flag:
                 self.flags |= feature.compiler_flag

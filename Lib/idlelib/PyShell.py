@@ -36,6 +36,8 @@ from idlelib import Debugger
 from idlelib import RemoteDebugger
 from idlelib import macosxSupport
 
+import garter
+
 HOST = '127.0.0.1' # python execution server on localhost loopback
 PORT = 0  # someday pass in host, port for remote debug capability
 
@@ -503,7 +505,7 @@ class ModifiedInterpreter(InteractiveInterpreter):
             # reload remote debugger breakpoints for all PyShellEditWindows
             debug.load_breakpoints()
         self.compile.compiler.flags = self.original_compiler_flags
-        self.compile.compiler.global_scope = garter_newglobalscope()
+        self.compile.compiler.global_scope = garter.Scope()
         self.restarting = False
         return self.rpcclt
 
@@ -646,7 +648,7 @@ class ModifiedInterpreter(InteractiveInterpreter):
                 source = fp.read()
         try:
             print("source_execfile:", source)
-            code = garter_compile(source, filename, "exec")
+            code = garter.gcompile(source, filename, "exec")
         except (OverflowError, SyntaxError):
             self.tkconsole.resetoutput()
             print('*** Error in script or command!\n'

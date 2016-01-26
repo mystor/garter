@@ -26,6 +26,8 @@ from idlelib import PyShell
 from idlelib.configHandler import idleConf
 from idlelib import macosxSupport
 
+import garter
+
 indent_message = """Error: Inconsistent indentation detected!
 
 1) Your indentation is outright incorrect (easy to fix), OR
@@ -98,7 +100,7 @@ class ScriptBinding:
         try:
             # If successful, return the compiled code
             print("source:", source)
-            return garter_compile(source, filename, "exec")
+            return garter.gcompile(source, filename, "exec")
         except (SyntaxError, OverflowError, ValueError) as value:
             msg = getattr(value, 'msg', '') or value or "<no detail available>"
             lineno = getattr(value, 'lineno', '') or 1
