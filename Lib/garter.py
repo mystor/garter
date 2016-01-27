@@ -27,9 +27,11 @@ _filename = None # Set by the compile function
 
 
 # >>> 1 + "foo"
-# garter.InvalidOperands: File "<console>", line 1
-#     1 + "foo"
-#  int^   ^str
+#   File "<console>", line 1
+# garter.InvalidOperands:
+#    1| 1 + "foo"
+#       ^   ^
+#      int str
 # Invalid operands to '+' operator: int + str
 #
 # Note: File "<console>", line 1
@@ -37,8 +39,9 @@ _filename = None # Set by the compile function
 # Consider casting the int to a str first
 
 # >>> foo(10)
-# garter.TypeMismatch: File "<console>", line 1
-#           foo(10)
+#   File "<console>", line 1
+# garter.TypeMismatch:
+# 1|        foo(10)
 #  None(str)^   ^int
 # Expected argument 1 to 'foo' to be a str, instead found an int
 #
@@ -799,6 +802,129 @@ def validate_expr(scope, expr, lvalue = False):
     raise GarterError(expr, "Unrecognized expression kind")
 
 
+def validate_methoddef(scope, clazz, stmt):
+    # Make sure we have a valid function name
+    ensure_non_keyword(stmt.name)
+    if len(stmt.decorator_list) > 0:
+        raise GarterError(stmt, "Decorators are not supported")
+
+    returns = validate_type(scope, stmt.returns) if stmt.returns != None else TY_NONE
+
+    # Make sure we aren't using any unsupported features
+    arguments = stmt.args
+    if arguments.vararg != None:
+        raise GarterError(stmt, "Varargs are not supported")
+    if arguments.kwarg != None:
+        raise GarterError(stmt, "Kwards are not supported")
+    if len(arguments.defaults) > 0 or len(arguments.kw_defaults) > 0:
+        raise GarterError(stmt, "Default arguments are not supported")
+    if len(arguments.kwonlyargs) > 0:
+        raise GarterError(stmt, "Keyword only arguments are not supported")
+    if len(arguments.args) < 1:
+        raise GarterError(stmt, "Method definitions must have the implicit self argument")
+
+    # Determine the types of arguments
+    arg_tys = []
+    inner = Scope(scope, root=True)
+
+    # Handle the first argument (the implicit self argument)
+    isa = arguments.args[0]
+    ensure_non_keyword(isa.arg)
+    if isa.annotation != None:
+        raise GarterError(isa, "The implicit self argument should not have a type annotation")
+    # Don't add to arg_tys
+    if not inner.declare(isa.arg, clazz):
+        raise RuntimeError("This should not be able to happen...")
+
+    for arg in arguments.args[1:]:
+        ensure_non_keyword(arg.arg)
+        if arg.annotation == None:
+            raise GarterError(arg, "Type annotations on arguments are required")
+        ty = validate_type(scope, arg.annotation)
+        arg_tys.append(ty) # Record the type of the argument
+        if not inner.declare(arg.arg, ty):
+            raise GarterError(arg, f"There is another argument with name {arg.arg}")
+
+    # Define the variable in scope for the function
+    fty = TyFunc(returns, arg_tys)
+    def func_init():
+        # XXX: Discover locals?
+        inner._func = fty
+        did_return = validate_stmts(inner, stmt.body)
+        if not did_return and returns != TY_NONE:
+            raise GarterError(stmt, "Control flow reaches end of non-void method")
+        # Flush all functions declared within this function!
+        inner.flush()
+
+    if stmt.name in clazz.fields:
+        raise GarterError(stmt, f"Field with name {stmt.name} has "
+                          f"already been defined")
+    clazz.fields[stmt.name] = Attribute(fty, mutable=False)
+
+    return func_init # Return the initializer
+
+
+def validate_fielddef(scope, clazz, stmt):
+    if len(stmt.targets) != 1:
+        raise GarterError(stmt, "Field definitions may only have a single target")
+    if not stmt.type: # Assignment, not declaration
+        raise GarterError(stmt, "Statement type is not supported in class declarations")
+
+    value_ty = validate_expr(scope, stmt.value)
+    if isinstance(stmt.type, ast.Ellipsis):
+        target_ty = value_ty
+    else:
+        target_ty = validate_type(scope, stmt.type)
+        if not target_ty.subsumes(value_ty):
+            raise GarterError(stmt, "Invalid type in assignment")
+
+    if not target_ty.is_complete():
+        raise GarterError(stmt, "Incomplete type in declaration")
+
+
+    target = stmt.targets[0]
+    if type(target) != ast.Name:
+        raise GarterError(target, "Complex expressions are not "
+                            "legal on the left hand side of a field "
+                            "declaration")
+
+    ensure_non_keyword(target)
+    if target.id in clazz.fields:
+        raise GarterError(target, f"Field with name {target.id} has already been defined")
+    clazz.fields[target.id] = Attribute(target_ty, mutable=True)
+
+    return lambda: None # No initialization required
+
+
+def validate_class_stmt(scope, clazz, stmt):
+    if type(stmt) is ast.Assign:
+        return validate_fielddef(scope, clazz, stmt)
+    elif type(stmt) is ast.FunctionDef:
+        return validate_methoddef(scope, clazz, stmt)
+    raise GarterError(stmt, f"Statement type {type(stmt)} is not supported in class declarations")
+
+
+def validate_classdef(scope, stmt):
+    ensure_non_keyword(stmt.name)
+    if len(stmt.bases) > 0 or len(stmt.keywords) > 0:
+        raise GarterError(stmt, "Base classes are not supported yet")
+    if len(stmt.decorator_list) > 0:
+        raise GarterError(stmt, "Decorators are not supported")
+
+    clazz = TyClass({})
+    if not scope.declare(stmt.name, clazz):
+        raise GarterError(stmt, f"Variable with name {stmt.name} has "
+                          f"already been defined")
+
+    initializers = []
+    for s in stmt.body:
+        initializers.append(validate_class_stmt(scope, clazz, s))
+
+    # Initialize the methods in the class
+    for init in initializers:
+        init()
+
+
 def validate_assign(scope, stmt):
     if len(stmt.targets) != 1:
         raise GarterError(stmt, "Assignments may only have a single "
@@ -968,7 +1094,6 @@ def validate_funcdef(scope, stmt):
     if len(stmt.decorator_list) > 0:
         raise GarterError(stmt, "Decorators are not supported")
 
-    # XXX: This is ugly - not sure what the best way to handle this would be
     returns = validate_type(scope, stmt.returns) if stmt.returns != None else TY_NONE
 
     # Make sure we aren't using any unsupported features
@@ -992,7 +1117,7 @@ def validate_funcdef(scope, stmt):
         ty = validate_type(scope, arg.annotation)
         arg_tys.append(ty) # Record the type of the argument
         if not inner.declare(arg.arg, ty):
-            raise GarterError(arg, "There is another argument with name {}".format(arg))
+            raise GarterError(arg, f"There is another argument with name {arg.arg}")
 
     # Define the variable in scope for the function
     fty = TyFunc(returns, arg_tys)
@@ -1006,7 +1131,7 @@ def validate_funcdef(scope, stmt):
         inner.flush()
     if not scope.declare(stmt.name, fty, mutable=False, init=func_init):
         raise GarterError(stmt, f"Variable with name {stmt.name} has "
-                          f"already been defined {scope.vars}")
+                          f"already been defined")
 
 
 def validate_stmt(scope, stmt):
@@ -1022,7 +1147,8 @@ def validate_stmt(scope, stmt):
         return False
 
     elif kind is ast.ClassDef:
-        raise NotImplementedError()
+        validate_classdef(scope, stmt)
+        return False
 
     elif kind is ast.Return:
         validate_return(scope, stmt)
