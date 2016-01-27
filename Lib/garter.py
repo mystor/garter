@@ -316,6 +316,7 @@ class Variable:
         self._init() # Maybe pass self?
         self._init = None
         return
+INVALID_VARIABLE = 'invalid_variable' # Special case value
 
 
 class VariableInfo:
@@ -363,7 +364,7 @@ class Scope:
         # Check if it is in this scope or any non-root parents
         curr = self
         while True:
-            if name in curr.vars:
+            if name in curr.vars and curr.vars[name] != INVALID_VARIABLE:
                 return False
             if curr.root: break
             curr = curr.up
@@ -379,10 +380,17 @@ class Scope:
         If the variable has an associated init, and has not been init-ed,
         invokes that function.
         """
+        # XXX: This and the logic in validate_name are very deeply interlinked
         local = True
         curr = self
         while curr != None:
+            # Check if we are looking at non-root local variables
+            if not (local or curr.root):
+                curr = curr.up
+                continue
             if name in curr.vars:
+                if curr.vars[name] is INVALID_VARIABLE:
+                    return INVALID_VARIABLE
                 curr.vars[name].init()
                 return VariableInfo(curr.vars[name], local, curr.up == None)
             if curr.root:
@@ -420,6 +428,11 @@ class Scope:
         self.classes[name] = clazz
         return True
 
+    def found_local(self, name):
+        assert self.root
+        if name not in self.vars:
+            self.vars[name] = INVALID_VARIABLE
+
     def backup(self):
         assert self.up == None and self.root and self._func == None
         return {
@@ -448,6 +461,24 @@ def ensure_non_keyword(name):
     if keyword_re.match(name):
         raise GarterError(name, "Expected identifier, "
                           "instead found keyword {}".format(name))
+
+
+def discover_locals(scope, stmt):
+    kind = type(stmt)
+    if kind is list:# Handle being passed a list of stmts
+        for s in stmt: discover_locals(scope, s)
+    elif kind is ast.FunctionDef:
+        scope.found_local(stmt.name)
+    elif kind is ast.ClassDef:
+        scope.found_local(stmt.name)
+    elif kind is ast.Assign:
+        for target in stmt.targets:
+            if type(target) is ast.Name:
+                scope.found_local(target.id)
+    elif kind is ast.For:
+        if type(stmt.target) is ast.Name:
+            scope.found_local(stmt.target.id)
+    # Also global and nonlocal statements, but those are different
 
 
 def validate_type(scope, expr):
@@ -615,6 +646,8 @@ def validate_name(scope, expr, lvalue):
     var = scope.lookup(expr.id)
     if var == None:
         raise GarterError(expr, "No variable with name {} in scope".format(expr.id))
+    if var == INVALID_VARIABLE:
+        raise GarterError(expr, "The variable with name {} may not be initialized".format(expr.id))
     if lvalue:
         if not var.mutable:
             raise GarterError(expr, "Cannot assign to {}, as it is "
@@ -883,7 +916,9 @@ def validate_methoddef(scope, clazz, stmt):
     # Define the variable in scope for the function
     fty = TyFunc(returns, arg_tys)
     def func_init():
-        # XXX: Discover locals?
+        # Discover locals for scoping rules
+        discover_locals(inner, stmt.body)
+        # Perform the actual validation
         inner._func = fty
         did_return = validate_stmts(inner, stmt.body)
         if not did_return and returns != TY_NONE:
@@ -1160,7 +1195,9 @@ def validate_funcdef(scope, stmt):
     # Define the variable in scope for the function
     fty = TyFunc(returns, arg_tys)
     def func_init():
-        # XXX: Discover locals?
+        # Discover locals for scoping rules
+        discover_locals(inner, stmt.body)
+        # Perform the actual validation
         inner._func = fty
         did_return = validate_stmts(inner, stmt.body)
         if not did_return and returns != TY_NONE:
@@ -1286,6 +1323,9 @@ def validate_mod(scope, mod):
 def validate(mod, scope):
     backup = scope.backup()
     try:
+        # Discover locals for scoping rules
+        discover_locals(inner, stmt.body)
+        # Actually validate
         validate_mod(scope, mod)
         scope.flush()
     except:
@@ -1322,7 +1362,6 @@ def gcompile(source,
     if scope.up != None or not scope.root:
         raise TypeError("Unexpected non-toplevel scope!")
     try:
-        # XXX: Discover locals
         validate(source, scope)
     finally:
         _filename = None
