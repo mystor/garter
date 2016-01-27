@@ -390,11 +390,35 @@ class Scope:
             curr = curr.up
         return None
 
-    def declare_class(self, name, fields):
+    def lookup_class(self, name):
         """
-        XXX: Allow class definitions outside of the very top level?
+        Looks up a class with the given name. Returns the type of the class if
+        it is found, and None otherwise.
         """
-        raise NotImplementedError()
+        curr = self
+        while curr != None:
+            if name in curr.classes:
+                return curr.classes[name]
+            curr = curr.up
+        return None
+
+    def declare_class(self, name, clazz):
+        """
+        Declares a class with the given name. If it has already been declared
+        within this scope, returns False, otherwise returns True.
+        """
+        assert type(name) is str
+
+        # Check if it is in this scope or any non-root parents
+        curr = self
+        while True:
+            if name in curr.classes:
+                return False
+            if curr.root: break
+            curr = curr.up
+
+        self.classes[name] = clazz
+        return True
 
     def backup(self):
         assert self.up == None and self.root and self._func == None
@@ -438,8 +462,12 @@ def validate_type(scope, expr):
         elif expr.id == 'bool':
             return TY_BOOL
 
-        # XXX: Classes
+        # Class Types
         ensure_non_keyword(expr)
+        clazz = scope.lookup_class(expr.id)
+        if clazz != None:
+            return clazz
+
         raise GarterError(expr, "Unrecognized type name {}".format(expr.id))
 
     if type(expr) == ast.Dict:
@@ -456,6 +484,13 @@ def validate_type(scope, expr):
                               "List types may only have a single type listed")
         elt = validate_type(scope, expr.elts[0])
         return TyList(elt)
+
+    if type(expr) == ast.Call:
+        if len(expr.keywords) > 0:
+            raise GarterError(expr, "Function types don't have keyword arguments")
+        returns = validate_type(scope, expr.func)
+        args = [validate_type(scope, arg) for arg in expr.args]
+        return TyFunc(returns, args)
 
     raise GarterError(expr, "Malformed type")
 
@@ -912,8 +947,11 @@ def validate_classdef(scope, stmt):
         raise GarterError(stmt, "Decorators are not supported")
 
     clazz = TyClass({})
-    if not scope.declare(stmt.name, clazz):
+    if not scope.declare(stmt.name, TyFunc(clazz, [])):
         raise GarterError(stmt, f"Variable with name {stmt.name} has "
+                          f"already been defined")
+    if not scope.declare_class(stmt.name, clazz):
+        raise GarterError(stmt, f"Class with name {stmt.name} has "
                           f"already been defined")
 
     initializers = []
