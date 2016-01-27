@@ -62,11 +62,11 @@ import garter
 _features = [getattr(__future__, fname)
              for fname in __future__.all_feature_names]
 
-__all__ = ["compile_command", "Compile", "CommandCompiler"]
+__all__ = ["Compile", "CommandCompiler"]
 
 PyCF_DONT_IMPLY_DEDENT = 0x200          # Matches pythonrun.h
 
-def _maybe_compile(compiler, source, filename, symbol):
+def _maybe_compile(compiler, source, filename, symbol, scope):
     # Check for source consisting of only blank lines and comments
     for line in source.split("\n"):
         line = line.strip()
@@ -79,48 +79,35 @@ def _maybe_compile(compiler, source, filename, symbol):
     err = err1 = err2 = None
     code = code1 = code2 = None
 
+    # Try to compile it as-is, we take a back up just in case
+    backup = scope.backup()
     try:
-        code = compiler(source, filename, symbol)
+        code = compiler(source, filename, symbol, scope)
     except SyntaxError as err:
         pass
 
-    try:
-        code1 = compiler(source + "\n", filename, symbol)
-    except SyntaxError as e:
-        err1 = e
-
-    try:
-        code2 = compiler(source + "\n\n", filename, symbol)
-    except SyntaxError as e:
-        err2 = e
-
     if code:
         return code
+    scope.restore(backup) # We decided not to compile
+
+    # These compiler outputs will not be used - so we restore the old value when done
+
+    backup = scope.backup()
+    try:
+        code1 = compiler(source + "\n", filename, symbol, scope)
+    except SyntaxError as e:
+        err1 = e
+    scope.restore(backup)
+
+    backup = scope.backup()
+    try:
+        code2 = compiler(source + "\n\n", filename, symbol, scope)
+    except SyntaxError as e:
+        err2 = e
+    scope.restore(backup)
+
     if not code1 and repr(err1) == repr(err2):
         raise err1
-
-def _compile(source, filename, symbol):
-    return garter.gcompile(source, filename, symbol, PyCF_DONT_IMPLY_DEDENT)
-
-def compile_command(source, filename="<input>", symbol="single"):
-    r"""Compile a command and determine whether it is incomplete.
-
-    Arguments:
-
-    source -- the source string; may contain \n characters
-    filename -- optional filename from which source was read; default
-                "<input>"
-    symbol -- optional grammar start symbol; "single" (default) or "eval"
-
-    Return value / exceptions raised:
-
-    - Return a code object if the command is complete and valid
-    - Return None if the command is incomplete
-    - Raise SyntaxError, ValueError or OverflowError if the command is a
-      syntax error (OverflowError and ValueError can be produced by
-      malformed literals).
-    """
-    return _maybe_compile(_compile, source, filename, symbol)
 
 class Compile:
     """Instances of this class behave much like the built-in compile
@@ -129,11 +116,10 @@ class Compile:
     with the statement in force."""
     def __init__(self):
         self.flags = PyCF_DONT_IMPLY_DEDENT
-        self.global_scope = garter.Scope()
 
-    def __call__(self, source, filename, symbol):
+    def __call__(self, source, filename, symbol, scope):
         # XXX: Also "remember" scopes etc.
-        codeob = garter.gcompile(source, filename, symbol, self.flags, 1, -1, self.global_scope)
+        codeob = garter.gcompile(source, filename, symbol, self.flags, 1, scope=scope)
         for feature in _features:
             if codeob.co_flags & feature.compiler_flag:
                 self.flags |= feature.compiler_flag
@@ -148,6 +134,7 @@ class CommandCompiler:
 
     def __init__(self,):
         self.compiler = Compile()
+        self.scope = garter.Scope() # A fresh global scope
 
     def __call__(self, source, filename="<input>", symbol="single"):
         r"""Compile a command and determine whether it is incomplete.
@@ -168,4 +155,4 @@ class CommandCompiler:
           syntax error (OverflowError and ValueError can be produced by
           malformed literals).
         """
-        return _maybe_compile(self.compiler, source, filename, symbol)
+        return _maybe_compile(self.compiler, source, filename, symbol, self.scope)

@@ -22,15 +22,56 @@ import ast
 import re
 
 _filename = None # Set by the compile function
-def GarterError(node, body):
-    """
-    Produce an error object which can be thrown to represent an error.
-    XXX: Make this better and probably have a custom class for the error.
-    """
-    # XXX: This should work better
-    # XXX: Actually include the text property, and have it set correctly
-    return SyntaxError(body, (_filename, node.lineno, node.col_offset, None))
-    return error
+
+# Ideal error?
+
+
+# >>> 1 + "foo"
+# garter.InvalidOperands: File "<console>", line 1
+#     1 + "foo"
+#  int^   ^str
+# Invalid operands to '+' operator: int + str
+#
+# Note: File "<console>", line 1
+#     str(1) + "foo"
+# Consider casting the int to a str first
+
+# >>> foo(10)
+# garter.TypeMismatch: File "<console>", line 1
+#           foo(10)
+#  None(str)^   ^int
+# Expected argument 1 to 'foo' to be a str, instead found an int
+#
+# Note: File "<console>", line 1
+#     def foo(a: str):
+# foo was declared here
+
+# XXX: pretty-print the code for type annotation purposes?
+
+# XXX: Improve the error system
+#
+# * Add Notes to errors to refer to other pieces of code
+# * Potentially circumvent the SyntaxError requirement, to get better formatting
+class GarterError(SyntaxError):
+    def __init__(self, node, body):
+        super().__init__(body, (_filename, node.lineno, node.col_offset, None))
+
+
+#def GarterError(node, body):
+#    """
+#    Produce an error object which can be thrown to represent an error.
+#    XXX: Make this better and probably have a custom class for the error.
+#    """
+#    # XXX: This should work better
+#    # XXX: Actually include the text property, and have it set correctly
+#    #return Exception(body)
+#    return SyntaxError(body, (_filename, node.lineno, node.col_offset, None))
+
+
+class Attribute:
+    def __init__(self, ty, mutable):
+        self.ty = ty
+        self.mutable = mutable
 
 
 class Ty:
@@ -41,11 +82,30 @@ class Ty:
         """
         return self == other
 
+    def attribute(self, name):
+        return self._attributes.get(name, None)
+
     def __eq__(self, other):
-        self.subsumes(other) and other.subsumes(self)
+        return self.subsumes(other) and other.subsumes(self)
+
+
+class TyNone(Ty):
+    _attributes = {}
+
+    def is_complete(self):
+        return False
+
+    def subsumes(self, other):
+        return type(other) == TyNone
+
+    def __repr__(self):
+        return 'None'
+TY_NONE = TyNone() # Singleton instance
 
 
 class TyInt(Ty):
+    _attributes = {}
+
     def is_complete(self):
         return True
 
@@ -58,6 +118,8 @@ TY_INT = TyInt() # Singleton instance
 
 
 class TyFloat(Ty):
+    _attributes = {}
+
     def is_complete(self):
         return True
 
@@ -70,7 +132,9 @@ class TyFloat(Ty):
 TY_FLOAT = TyFloat() # Singleton instance
 
 
-class TyBool:
+class TyBool(Ty):
+    _attributes = {}
+
     def is_complete(self):
         return True
 
@@ -82,7 +146,9 @@ class TyBool:
 TY_BOOL = TyBool() # Singleton instance
 
 
-class TyStr:
+class TyStr(Ty):
+    _attributes = {}
+
     def is_complete(self):
         return True
 
@@ -94,7 +160,9 @@ class TyStr:
 TY_STR = TyStr() # Singleton instance
 
 
-class TyDict:
+class TyDict(Ty):
+    _attributes = {}
+
     def __init__(self, key, value):
         self.key = key
         self.value = value
@@ -124,7 +192,9 @@ class TyDict:
         return '{{{}: {}}}'.format(self.key, self.value)
 
 
-class TyList:
+class TyList(Ty):
+    _attributes = {}
+
     def is_complete(self):
         return self.item != None and self.item.is_complete()
 
@@ -145,7 +215,9 @@ class TyList:
         return '[{}]'.format(self.item)
 
 
-class TyClass:
+class TyClass(Ty):
+    _attributes = {}
+
     def is_complete(self):
         return self.fields != None
 
@@ -168,7 +240,9 @@ class TyClass:
         return 'class '.format(self.item)
 
 
-class TyFunc:
+class TyFunc(Ty):
+    _attributes = {}
+
     def is_complete(self):
         return True
 
@@ -202,6 +276,16 @@ class TyFunc:
             return False
         return self.ret == other.ret and \
             self.args == other.args
+
+    def __repr__(self):
+        return repr(self.ret)+'(' + ', '.join([repr(x) for x in self.args]) + ')'
+
+
+#
+# Attributes on types
+#
+
+TyStr._attributes['join'] = TyFunc(TY_STR, [TyList(TY_STR)])
 
 
 def subsume(a, b):
@@ -310,14 +394,14 @@ class Scope:
         raise NotImplementedError()
 
     def backup(self):
-        assert self.up == None
+        assert self.up == None and self.root and self._func == None
         return {
             'vars': self.vars.copy(),
             'classes': self.classes.copy(),
         }
 
     def restore(self, backup):
-        assert self.up == None
+        assert self.up == None and self.root and self._func == None
         self.vars = backup['vars']
         self.classes = backup['classes']
 
@@ -456,6 +540,53 @@ def validate_unaryop(scope, expr):
     raise GarterError(expr, "Unrecognized unary operator")
 
 
+def validate_compare(scope, expr):
+    left = validate_expr(scope, expr.left)
+    for op, right in zip(expr.ops, expr.comparators):
+        kind = type(op)
+        # XXX: Actually write out the right operator in error messages
+        if kind == ast.Eq or kind == ast.NotEq:
+            x = subsume(lhs, rhs)
+            if x == None:
+                raise GarterError(f"Invalid operands to ==/!=: {left} and {right}")
+
+        elif kind == ast.Lt or kind == ast.LtE or \
+             kind == ast.Gt or kind == ast.Gte:
+            if not (TY_FLOAT.subsumes(lhs) and TY_FLOAT.subsumes(rhs)):
+                raise GarterError(f"Invalid operands to </<=/>/>=: {left} and {right}")
+
+        elif kind == ast.In or kind == ast.NotIn:
+            if type(right) == TyList:
+                if not right.item.subsumes(left):
+                    raise GarterError(f"Invalid operands to in: {left} and {right}")
+            elif type(right) == TyDict:
+                if not right.key.subsumes(left):
+                    raise GarterError(f"Invalid operands to in: {left} and {right}")
+            else:
+                raise GarterError(f"Invalid operands to in: {left} and {right}")
+
+        else:
+            raise GarterError("Unsupported operator")
+        left = right
+
+    return TY_BOOL
+
+
+def validate_name(scope, expr, lvalue):
+    ensure_non_keyword(expr)
+    var = scope.lookup(expr.id)
+    if var == None:
+        raise GarterError(expr, "No variable with name {} in scope".format(expr.id))
+    if lvalue:
+        if not var.mutable:
+            raise GarterError(expr, "Cannot assign to {}, as it is "
+                                "non-mutable")
+        if not var.local:
+            raise GarterError(expr, "Cannot assign to {}, as it is "
+                                "non-local. Try using the `nonlocal` or "
+                                "`global` statement to expose it in this scope")
+    return var.ty
+
 def validate_ifexp(scope, expr):
     test = validate_expr(scope, expr.test)
     if not TY_BOOL.subsumes(test):
@@ -509,62 +640,161 @@ def validate_list(scope, expr):
             raise GarterError(expr, "Mismatched Types: Arrays must contain "
                               "consistent element types.")
     return TyList(elt) # Works even if elt is None
-    
 
+
+def validate_attribute(scope, expr, lvalue):
+    ty = validate_expr(expr.value)
+    ensure_non_keyword(expr.attr)
+    attr = ty.attribute(expr.attr)
+    if attr == None:
+        raise GarterError(expr, "Type {} does not have an attribute {}".format(ty, attr))
+    if lvalue and not attr.mutable:
+        raise GarterError(expr, "Attempt to assign to immutable attribute")
+    return attr.ty
+
+
+def validate_subscript_slice(scope, expr, lvalue):
+    ty = validate_expr(scope, expr.value)
+    def require_int(x):
+        if x != None:
+            ty = validate_expr(scope, x)
+            if not TY_INT.subsumes(ty):
+                raise GarterError(x, "Expected int as slice operand, "
+                                  "instead got {}".format(ty))
+    require_int(expr.slice.lower)
+    require_int(expr.slice.upper)
+    require_int(expr.slice.step)
+
+    if type(ty) == TyStr:
+        if lvalue:
+            raise GarterError(expr, "str is immutable, cannot mutate it")
+        return TY_STR
+    elif type(ty) == TyList:
+        return ty
+    raise GarterError(expr, "Type {} does not support slicing".format(ty))
+
+
+def validate_subscript_index(scope, expr, lvalue):
+    ty = validate_expr(scope, expr.value)
+    index = validate_expr(scope, expr.slice.value)
+
+    if type(ty) == TyStr:
+        if lvalue:
+            raise GarterError(expr, "str is immutable, cannot mutate it")
+        if not TY_INT.subsumes(index):
+            raise GarterError(expr, "Can only index into str with int")
+        return TY_STR
+    elif type(ty) == TyList:
+        if not TY_INT.subsumes(index):
+            raise GarterError(expr, "Can only index into {} with int".format(ty))
+        return ty.item
+    elif type(ty) == TyDict:
+        if not ty.key.subsumes(index):
+            raise GarterError(expr, "Can only index into {} with {}".format(ty, ty.key))
+        return ty.value
+
+
+def validate_subscript(scope, expr, lvalue):
+    slicekind = type(expr.slice)
+    if slicekind == ast.Slice:
+        return validate_subscript_slice(scope, expr, lvalue)
+    elif slicekind == ast.Index:
+        return validate_subscript_index(scope, expr, lvalue)
+    raise GarterError(expr, "Unaccepted slice format")
+
+
+def validate_call(scope, expr):
+    if len(expr.keywords) > 0:
+        raise GarterError(expr, "Keyword arguments are not supported")
+    func = validate_expr(scope, expr.func)
+    if type(func) != TyFunc:
+        raise GarterError(expr, "Cannot call a non-function object")
+    if len(func.args) != len(expr.args):
+        raise GarterError(expr, "Function of type {} expected {} arguments, "
+                          "instead found {}".format(func, len(func.args), len(expr.args)))
+    for ty, arg in zip(func.args, expr.args):
+        arg_ty = validate_expr(scope, arg)
+        if not ty.subsumes(arg_ty):
+            raise GarterError(arg, "Expected {}, instead found {}".format(ty, arg_ty))
+    return func.ret
+
+
+def validate_len(scope, expr):
+    if len(expr.keywords) > 0:
+        raise GarterError(expr, "len() doesn't accept keyword arguments")
+    if len(expr.args) != 1:
+        raise GarterError(expr, "len() accepts exactly 1 argument")
+    ty = validate_expr(expr.args[0])
+    if type(ty) == TyStr or \
+       type(ty) == TyList or \
+       type(ty) == TyDict:
+        return TY_INT
+    raise GarterError(expr, "the len() operation is not supported on {}".format(ty))
+
+
+# XXX: Can we handle the lvalue context stuff with the built in analysis and
+# the expr_context property?
 def validate_expr(scope, expr, lvalue = False):
     # Confirm that it is valid in the lvalue context
-    if lvalue and not (isinstance(expr, ast.Name) or
-                       isinstance(expr, ast.Subscript) or
-                       isinstance(expr, ast.Attribute)):
+    kind = type(expr)
+    if lvalue and not (kind is ast.Name or
+                       kind is ast.Subscript or
+                       kind is ast.Attribute):
         raise GarterError(expr, "Can only assign to names, "
                             "attributes, and subscriptions")
 
-    if isinstance(expr, ast.Num):
+    if kind is ast.Num:
         if isinstance(expr.n, int):
             return TY_INT
         return TY_FLOAT
 
-    elif isinstance(expr, ast.JoinedStr) or \
-         isinstance(expr, ast.Str):
+    # XXX: Add support for f-strings? (pep498)
+    elif kind is ast.Str:
         return TY_STR
 
-    elif isinstance(expr, ast.Name):
-        ensure_non_keyword(expr)
-        var = scope.lookup(expr.id)
-        if var == None:
-            raise GarterError(expr, "No variable with name {} in scope".format(expr.id))
-        if lvalue:
-            if not var.mutable:
-                raise GarterError(expr, "Cannot assign to {}, as it is "
-                                  "non-mutable")
-            if not var.local:
-                raise GarterError(expr, "Cannot assign to {}, as it is "
-                                  "non-local. Try using the `nonlocal` or "
-                                  "`global` statement to expose it in this scope")
-        return var.ty
+    elif kind is ast.Name:
+        return validate_name(scope, expr, lvalue)
 
-    elif isinstance(expr, ast.BoolOp):
+    elif kind is ast.BoolOp:
         return validate_boolop(scope, expr)
 
-    elif isinstance(expr, ast.NameConstant):
+    elif kind is ast.NameConstant:
         if isinstance(expr.value, bool):
             return TY_BOOL
         raise GarterError(expr, "Unrecognized NameConstant")
 
-    elif isinstance(expr, ast.List):
+    elif kind is ast.List:
         return validate_list(scope, expr)
 
-    elif isinstance(expr, ast.Dict):
+    elif kind is ast.Dict:
         return validate_dict(scope, expr)
 
-    elif isinstance(expr, ast.BinOp):
+    elif kind is ast.BinOp:
         return validate_binop(scope, expr)
 
-    elif isinstance(expr, ast.UnaryOp):
+    elif kind is ast.UnaryOp:
         return validate_unaryop(scope, expr)
 
-    elif isinstance(expr, ast.IfExp):
+    elif kind is ast.IfExp:
         return validate_ifexp(scope, expr)
+
+    elif kind is ast.Lambda:
+        raise NotImplementedError()
+
+    elif kind is ast.Compare:
+        return validate_compare(scope, expr)
+
+    elif kind is ast.Call:
+        if type(expr.func) is ast.Name:
+            if expr.func.id == "len":
+                return validate_len(scope, expr)
+        return validate_call(scope, expr)
+
+    elif kind is ast.Attribute:
+        return validate_attribute(scope, expr, lvalue)
+
+    elif kind is ast.Subscript:
+        return validate_subscript(scope, expr, lvalue)
 
     raise GarterError(expr, "Unrecognized expression kind")
 
@@ -638,8 +868,18 @@ def validate_if(scope, stmt):
         validate_scoped(scope, stmt.orelse)
 
 
-def validate_print(scope, stmt):
-    raise NotImplementedError()
+def validate_print(scope, expr):
+    for arg in expr.args:
+        validate_expr(scope, arg)
+
+    for kw in expr.keywords:
+        if kw.arg == "end":
+            ty = validate_expr(scope, kw.value)
+            if not TY_STR.subsumes(ty):
+                raise GarterError(kw.value, f"Expect end argument to print to be str, "
+                                  f"instead found {ty}")
+        else:
+            raise GarterError(kw.value, f"Unsupported keyword argument to print: {kw.arg}")
 
 
 def validate_while(scope, stmt):
@@ -712,11 +952,11 @@ def validate_return(scope, stmt):
         raise GarterError(stmt, "Returns statement outside of function!")
     returns = scope.func().ret
     if stmt.value == None:
-        if returns != None:
+        if returns != TY_NONE:
             raise GarterError(stmt, "Must return value of type {}".format(returns))
     else:
         ty = validate_expr(scope, stmt.value)
-        if returns == None:
+        if returns == TY_NONE:
             raise GarterError(stmt, "Unexpected return value for function with no return value")
         if not returns.subsumes(ty):
             raise GarterError(stmt, "Expected return type {}, instead got {}".format(returns, ty))
@@ -729,10 +969,10 @@ def validate_funcdef(scope, stmt):
         raise GarterError(stmt, "Decorators are not supported")
 
     # XXX: This is ugly - not sure what the best way to handle this would be
-    returns = validate_type(scope, returns) if returns != None else None
+    returns = validate_type(scope, stmt.returns) if stmt.returns != None else TY_NONE
 
     # Make sure we aren't using any unsupported features
-    arguments = stmt.arguments
+    arguments = stmt.args
     if arguments.vararg != None:
         raise GarterError(stmt, "Varargs are not supported")
     if arguments.kwarg != None:
@@ -760,11 +1000,13 @@ def validate_funcdef(scope, stmt):
         # XXX: Discover locals?
         inner._func = fty
         did_return = validate_stmts(inner, stmt.body)
-        if not did_return and returns == None:
+        if not did_return and returns != TY_NONE:
             raise GarterError(stmt, "Control flow reaches end of non-void function")
         # Flush all functions declared within this function!
         inner.flush()
-    scope.declare(stmt.name, fty, mutable=False, init=func_init)
+    if not scope.declare(stmt.name, fty, mutable=False, init=func_init):
+        raise GarterError(stmt, f"Variable with name {stmt.name} has "
+                          f"already been defined {scope.vars}")
 
 
 def validate_stmt(scope, stmt):
@@ -881,6 +1123,7 @@ def validate(mod, scope):
     backup = scope.backup()
     try:
         validate_mod(scope, mod)
+        scope.flush()
     except:
         scope.restore(backup)
         raise
@@ -893,7 +1136,7 @@ def gcompile(source,
              flags=0,
              dont_inherit=False,
              optimize=-1,
-             global_scope=None):
+             scope=None):
     """
     Not named `compile`, such that the built in compile function is
     callable from this module, as we need to be able to compile it.
@@ -901,22 +1144,22 @@ def gcompile(source,
     if not isinstance(source, ast.AST):
         return gcompile(ast.parse(source, filename, mode),
                         filename, mode, flags, dont_inherit,
-                        optimize, global_scope)
+                        optimize, scope)
 
     # Create a default scope if one isn't provided for this invocation
-    if not global_scope:
-        global_scope = Scope()
+    if not scope:
+        scope = Scope()
 
     # Record the filename information for error reporting purposes
     global _filename
     _filename = filename
 
     # Ensure we have a valid global scope object
-    if global_scope.up != None or not global_scope.root:
+    if scope.up != None or not scope.root:
         raise TypeError("Unexpected non-toplevel scope!")
     try:
         # XXX: Discover locals
-        validate(source, global_scope)
+        validate(source, scope)
     finally:
         _filename = None
 
