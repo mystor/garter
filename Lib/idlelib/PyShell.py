@@ -505,7 +505,7 @@ class ModifiedInterpreter(InteractiveInterpreter):
             # reload remote debugger breakpoints for all PyShellEditWindows
             debug.load_breakpoints()
         self.compile.compiler.flags = self.original_compiler_flags
-        self.compile.compiler.global_scope = garter.Scope()
+        self.compile.compiler.global_scope = garter.new_global_scope()
         self.restarting = False
         return self.rpcclt
 

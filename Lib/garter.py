@@ -77,6 +77,14 @@ class Attribute:
         self.mutable = mutable
 
 
+def wrap_attr(m):
+    return { k: Attribute(v, mutable=False) for k, v in m.items() }
+
+
+def module(scope, asname, name, attrs):
+    scope.declare(asname, TyMod(name, attrs), mutable=False)
+
+
 class Ty:
     def completes(self, other):
         """
@@ -103,7 +111,6 @@ class TyNone(Ty):
 
     def __repr__(self):
         return 'None'
-TY_NONE = TyNone() # Singleton instance
 
 
 class TyInt(Ty):
@@ -117,7 +124,6 @@ class TyInt(Ty):
 
     def __repr__(self):
         return 'int'
-TY_INT = TyInt() # Singleton instance
 
 
 class TyFloat(Ty):
@@ -132,7 +138,6 @@ class TyFloat(Ty):
 
     def __repr__(self):
         return 'float'
-TY_FLOAT = TyFloat() # Singleton instance
 
 
 class TyBool(Ty):
@@ -146,12 +151,16 @@ class TyBool(Ty):
 
     def __repr__(self):
         return 'bool'
-TY_BOOL = TyBool() # Singleton instance
 
 
 class TyStr(Ty):
     _attributes = {}
 
+    def __init__(self):
+        self._attributes = wrap_attr({
+            'split': TyFunc(TyList(self), [self]),
+            'join': TyFunc(self, [TyList(self)]),
+        })
     def is_complete(self):
         return True
 
@@ -160,7 +169,6 @@ class TyStr(Ty):
 
     def __repr__(self):
         return 'str'
-TY_STR = TyStr() # Singleton instance
 
 
 class TyDict(Ty):
@@ -169,6 +177,14 @@ class TyDict(Ty):
     def __init__(self, key, value):
         self.key = key
         self.value = value
+        self._attributes = wrap_attr({
+            'pop': TyFunc(value, [key, value]),
+            'setdefault': TyFunc(value, [key, value]),
+            'get': TyFunc(value, [key, value]),
+            'clear': TyFunc(TY_NONE, []),
+            'copy': TyFunc(self, []),
+            'update': TyFunc(TY_NONE, [self]),
+        })
 
     def is_complete(self):
         return self.key != None and self.value != None and \
@@ -196,13 +212,23 @@ class TyDict(Ty):
 
 
 class TyList(Ty):
-    _attributes = {}
-
     def is_complete(self):
         return self.item != None and self.item.is_complete()
 
     def __init__(self, item):
         self.item = item
+        self._attributes = wrap_attr({
+            'append': TyFunc(TY_NONE, [item]),
+            'extend': TyFunc(TY_NONE, [self]),
+            'insert': TyFunc(TY_NONE, [TY_INT, item]),
+            'remove': TyFunc(TY_NONE, [item]),
+            'pop': TyFunc(item, [TY_INT]),
+            'index': TyFunc(TY_INT, [item]),
+            'count': TyFunc(TY_INT, [item]),
+            'reverse': TyFunc(TY_NONE, []),
+            'sort': TyFunc(TY_NONE, []),
+            'clear': TyFunc(TY_NONE, []),
+        })
 
     def subsumes(self, other):
         return self.completes(other)
@@ -219,12 +245,11 @@ class TyList(Ty):
 
 
 class TyClass(Ty):
-    _attributes = {}
-
     def is_complete(self):
         return self.fields != None
 
-    def __init__(self, fields):
+    def __init__(self, name, fields):
+        self.name = name
         self.fields = fields
 
     def subsumes(self, other):
@@ -239,8 +264,26 @@ class TyClass(Ty):
         return other.fields == None or \
             self.fields is other.fields
 
+    def attribute(self, name):
+        return self.fields.get(name, None)
+
     def __repr__(self):
-        return 'class '.format(self.item)
+        return f"class {self.name}"
+
+
+class TyMod(Ty):
+    def __init__(self, name, fields):
+        self.name = name
+        self._attributes = wrap_attr(fields)
+
+    def is_complete(self):
+        return False
+
+    def subsumes(self, other):
+        return other is self
+
+    def __repr__(self):
+        return f"module '{self.name}'"
 
 
 class TyFunc(Ty):
@@ -283,12 +326,11 @@ class TyFunc(Ty):
     def __repr__(self):
         return repr(self.ret)+'(' + ', '.join([repr(x) for x in self.args]) + ')'
 
-
-#
-# Attributes on types
-#
-
-TyStr._attributes['join'] = TyFunc(TY_STR, [TyList(TY_STR)])
+TY_NONE = TyNone()
+TY_BOOL = TyBool()
+TY_INT = TyInt()
+TY_FLOAT = TyFloat()
+TY_STR = TyStr()
 
 
 def subsume(a, b):
@@ -313,8 +355,9 @@ class Variable:
     def init(self):
         if self._init == None:
             return
-        self._init() # Maybe pass self?
+        init = self._init
         self._init = None
+        init() # Maybe pass self?
         return
 INVALID_VARIABLE = 'invalid_variable' # Special case value
 
@@ -325,6 +368,7 @@ class VariableInfo:
         self.mutable = var.mutable
         self.local = local
         self.globl = globl
+        self.var = var
 
 
 class Scope:
@@ -333,13 +377,11 @@ class Scope:
     starting from the root and going up to inner scopes such as function scopes.
     """
 
-    def __init__(self, up=None, root=False):
+    def __init__(self, up, root=False):
         self.up = up
         self.root = root
         self.vars = {}
         self.classes = {}
-        if up == None: # Global Scope - definitely a root (override)
-            self.root = True
         self._func = None # The current function type, set by validate_funcdef
 
     def func(self):
@@ -447,7 +489,8 @@ class Scope:
 
     def flush(self):
         for var in self.vars.values():
-            var.init()
+            if var != INVALID_VARIABLE:
+                var.init()
 
 
 # Garter defines keywords which aren't present in Python. We need to reject
@@ -455,11 +498,13 @@ class Scope:
 keyword_re = re.compile(r'__.+__|' # Starting and ending with __ => keyword
                         r'int|float|bool|str|' # Type keywords
                         r'len|range|print') # Magic Functions
-def ensure_non_keyword(name):
+def ensure_non_keyword(name, node=None):
     if isinstance(name, ast.Name):
+        if node == None:
+            node = name
         name = name.id
     if keyword_re.match(name):
-        raise GarterError(name, "Expected identifier, "
+        raise GarterError(node, "Expected identifier, "
                           "instead found keyword {}".format(name))
 
 
@@ -472,6 +517,8 @@ def discover_locals(scope, stmt):
     elif kind is ast.ClassDef:
         scope.found_local(stmt.name)
     elif kind is ast.Assign:
+        if stmt.type == None:
+            return
         for target in stmt.targets:
             if type(target) is ast.Name:
                 scope.found_local(target.id)
@@ -524,6 +571,72 @@ def validate_type(scope, expr):
         return TyFunc(returns, args)
 
     raise GarterError(expr, "Malformed type")
+
+
+def validate_funclike(scope, stmt, selfty=None):
+    """ Utility function used by funcdef and methoddef """
+
+    # Validate the name
+    ensure_non_keyword(stmt.name, stmt)
+    if len(stmt.decorator_list) > 0:
+        raise GarterError(stmt, "Decorators are not supported")
+
+    # Return Type
+    returns = validate_type(scope, stmt.returns) if stmt.returns != None else TY_NONE
+
+    # Reject unsuported syntax
+    arguments = stmt.args
+    if arguments.vararg != None:
+        raise GarterError(stmt, "Varargs are not supported")
+    if arguments.kwarg != None:
+        raise GarterError(stmt, "Kwards are not supported")
+    if len(arguments.defaults) > 0 or len(arguments.kw_defaults) > 0:
+        raise GarterError(stmt, "Default arguments are not supported")
+    if len(arguments.kwonlyargs) > 0:
+        raise GarterError(stmt, "Keyword only arguments are not supported")
+    if selfty != None and len(arguments.args) < 1:
+        raise GarterError(stmt, "Method definitions must have the implicit self argument")
+
+    # Determine the types of the arguments
+    arg_tys = []
+    args = arguments.args[:]
+    inner = Scope(scope, root=True)
+
+    # Handle the implicit self argument if present
+    if selfty != None:
+        isa = args.pop(0)
+        ensure_non_keyword(isa.arg, isa)
+        if isa.annotation != None:
+            raise GarterError(isa,
+                              "The implicit self argument should not have a type annotation")
+        if not inner.declare(isa.arg, selfty):
+            raise RuntimeError("This should not be able to happen...")
+
+    # Handle non-implicit self arguments
+    for arg in args:
+        ensure_non_keyword(arg.arg, arg)
+        if arg.annotation == None:
+            raise GarterError(arg, "Type annotations on arguments are required")
+        ty = validate_type(scope, arg.annotation)
+        arg_tys.append(ty) # Record the type of the argument
+        if not inner.declare(arg.arg, ty):
+            raise GarterError(arg, f"There is another argument with name {arg.arg}")
+
+    # Create the function type and the validation function
+    fty = TyFunc(returns, arg_tys)
+    def func_init():
+        """ The logic which is run when the function is referenced / invoked for the first time """
+        # Discover locals for scoping rules
+        discover_locals(inner, stmt.body)
+        # Perform the actual validation
+        inner._func = fty
+        did_return = validate_stmts(inner, stmt.body, froot=True)
+        if not did_return and returns != TY_NONE:
+            raise GarterError(stmt, "Control flow reaches end of non-void function")
+        # Flush all functions declared within this function!
+        inner.flush()
+
+    return (fty, func_init)
 
 
 def validate_boolop(scope, expr):
@@ -611,31 +724,35 @@ def validate_unaryop(scope, expr):
 
 def validate_compare(scope, expr):
     left = validate_expr(scope, expr.left)
-    for op, right in zip(expr.ops, expr.comparators):
+    for op, right_expr in zip(expr.ops, expr.comparators):
+        right = validate_expr(scope, right_expr)
         kind = type(op)
         # XXX: Actually write out the right operator in error messages
         if kind == ast.Eq or kind == ast.NotEq:
-            x = subsume(lhs, rhs)
+            x = subsume(left, right)
             if x == None:
-                raise GarterError(f"Invalid operands to ==/!=: {left} and {right}")
+                raise GarterError(expr, f"Invalid operands to ==/!=: {left} and {right}")
 
         elif kind == ast.Lt or kind == ast.LtE or \
-             kind == ast.Gt or kind == ast.Gte:
-            if not (TY_FLOAT.subsumes(lhs) and TY_FLOAT.subsumes(rhs)):
-                raise GarterError(f"Invalid operands to </<=/>/>=: {left} and {right}")
+             kind == ast.Gt or kind == ast.GtE:
+            if not (TY_FLOAT.subsumes(left) and TY_FLOAT.subsumes(right)):
+                raise GarterError(expr, f"Invalid operands to </<=/>/>=: {left} and {right}")
 
         elif kind == ast.In or kind == ast.NotIn:
-            if type(right) == TyList:
+            if right == TY_STR:
+                if not right.subsumes(left):
+                    raise GarterError(expr, f"Invalid operands to in: {left} and {right}")
+            elif type(right) == TyList:
                 if not right.item.subsumes(left):
-                    raise GarterError(f"Invalid operands to in: {left} and {right}")
+                    raise GarterError(expr, f"Invalid operands to in: {left} and {right}")
             elif type(right) == TyDict:
                 if not right.key.subsumes(left):
-                    raise GarterError(f"Invalid operands to in: {left} and {right}")
+                    raise GarterError(expr, f"Invalid operands to in: {left} and {right}")
             else:
-                raise GarterError(f"Invalid operands to in: {left} and {right}")
+                raise GarterError(expr, f"Invalid operands to in: {left} and {right}")
 
         else:
-            raise GarterError("Unsupported operator")
+            raise GarterError(expr, "Unsupported operator")
         left = right
 
     return TY_BOOL
@@ -650,13 +767,14 @@ def validate_name(scope, expr, lvalue):
         raise GarterError(expr, "The variable with name {} may not be initialized".format(expr.id))
     if lvalue:
         if not var.mutable:
-            raise GarterError(expr, "Cannot assign to {}, as it is "
+            raise GarterError(expr, f"Cannot assign to {expr.id}, as it is "
                                 "non-mutable")
         if not var.local:
-            raise GarterError(expr, "Cannot assign to {}, as it is "
+            raise GarterError(expr, f"Cannot assign to {expr.id}, as it is "
                                 "non-local. Try using the `nonlocal` or "
                                 "`global` statement to expose it in this scope")
     return var.ty
+
 
 def validate_ifexp(scope, expr):
     test = validate_expr(scope, expr.test)
@@ -714,11 +832,11 @@ def validate_list(scope, expr):
 
 
 def validate_attribute(scope, expr, lvalue):
-    ty = validate_expr(expr.value)
-    ensure_non_keyword(expr.attr)
+    ty = validate_expr(scope, expr.value)
+    ensure_non_keyword(expr.attr, expr)
     attr = ty.attribute(expr.attr)
     if attr == None:
-        raise GarterError(expr, "Type {} does not have an attribute {}".format(ty, attr))
+        raise GarterError(expr, f"{ty} does not have an attribute {expr.attr}")
     if lvalue and not attr.mutable:
         raise GarterError(expr, "Attempt to assign to immutable attribute")
     return attr.ty
@@ -779,7 +897,7 @@ def validate_call(scope, expr):
         raise GarterError(expr, "Keyword arguments are not supported")
     func = validate_expr(scope, expr.func)
     if type(func) != TyFunc:
-        raise GarterError(expr, "Cannot call a non-function object")
+        raise GarterError(expr, f"Expected a function object, instead found {func}")
     if len(func.args) != len(expr.args):
         raise GarterError(expr, "Function of type {} expected {} arguments, "
                           "instead found {}".format(func, len(func.args), len(expr.args)))
@@ -795,12 +913,38 @@ def validate_len(scope, expr):
         raise GarterError(expr, "len() doesn't accept keyword arguments")
     if len(expr.args) != 1:
         raise GarterError(expr, "len() accepts exactly 1 argument")
-    ty = validate_expr(expr.args[0])
+    ty = validate_expr(scope, expr.args[0])
     if type(ty) == TyStr or \
        type(ty) == TyList or \
        type(ty) == TyDict:
         return TY_INT
-    raise GarterError(expr, "the len() operation is not supported on {}".format(ty))
+    raise GarterError(expr.args[0], f"the len() operation is not supported on {ty}")
+
+
+def validate_cast(scope, expr):
+    if len(expr.keywords) > 0:
+        raise GarterError(expr, "casts don't accept keyword arguments")
+    if len(expr.args) != 1:
+        raise GarterError(expr, "casts accept exactly 1 argument")
+    ty = validate_expr(scope, expr.args[0])
+    if type(ty) != TyStr and \
+       type(ty) != TyInt and \
+       type(ty) != TyFloat:
+        raise GarterError(expr.args[0],
+                          f"can only cast from str, int, or float, instead found {ty}")
+
+
+def validate_input(scope, expr):
+    if len(expr.keywords) > 0:
+        raise GarterError(expr, "input() doesn't except keyword arguments")
+    if len(expr.args) > 1:
+        raise GarterError(expr, "input() accepts only 0-1 arguments")
+    if len(expr.args) == 0:
+        return
+    ty = validate_expr(scope, expr.args[0])
+    if ty != TY_STR:
+        raise GarterError(expr.args[0], "expected str parameter, instead found {ty}")
+
 
 
 # XXX: Can we handle the lvalue context stuff with the built in analysis and
@@ -859,6 +1003,19 @@ def validate_expr(scope, expr, lvalue = False):
         if type(expr.func) is ast.Name:
             if expr.func.id == "len":
                 return validate_len(scope, expr)
+            elif expr.func.id == "int":
+                validate_cast(scope, expr)
+                return TY_INT
+            elif expr.func.id == "str":
+                validate_cast(scope, expr)
+                return TY_STR
+            elif expr.func.id == "float":
+                validate_cast(scope, expr)
+                return TY_FLOAT
+            elif expr.func.id == "input":
+                validate_input(scope, expr)
+                return TY_STR
+
         return validate_call(scope, expr)
 
     elif kind is ast.Attribute:
@@ -871,63 +1028,9 @@ def validate_expr(scope, expr, lvalue = False):
 
 
 def validate_methoddef(scope, clazz, stmt):
-    # Make sure we have a valid function name
-    ensure_non_keyword(stmt.name)
-    if len(stmt.decorator_list) > 0:
-        raise GarterError(stmt, "Decorators are not supported")
-
-    returns = validate_type(scope, stmt.returns) if stmt.returns != None else TY_NONE
-
-    # Make sure we aren't using any unsupported features
-    arguments = stmt.args
-    if arguments.vararg != None:
-        raise GarterError(stmt, "Varargs are not supported")
-    if arguments.kwarg != None:
-        raise GarterError(stmt, "Kwards are not supported")
-    if len(arguments.defaults) > 0 or len(arguments.kw_defaults) > 0:
-        raise GarterError(stmt, "Default arguments are not supported")
-    if len(arguments.kwonlyargs) > 0:
-        raise GarterError(stmt, "Keyword only arguments are not supported")
-    if len(arguments.args) < 1:
-        raise GarterError(stmt, "Method definitions must have the implicit self argument")
-
-    # Determine the types of arguments
-    arg_tys = []
-    inner = Scope(scope, root=True)
-
-    # Handle the first argument (the implicit self argument)
-    isa = arguments.args[0]
-    ensure_non_keyword(isa.arg)
-    if isa.annotation != None:
-        raise GarterError(isa, "The implicit self argument should not have a type annotation")
-    # Don't add to arg_tys
-    if not inner.declare(isa.arg, clazz):
-        raise RuntimeError("This should not be able to happen...")
-
-    for arg in arguments.args[1:]:
-        ensure_non_keyword(arg.arg)
-        if arg.annotation == None:
-            raise GarterError(arg, "Type annotations on arguments are required")
-        ty = validate_type(scope, arg.annotation)
-        arg_tys.append(ty) # Record the type of the argument
-        if not inner.declare(arg.arg, ty):
-            raise GarterError(arg, f"There is another argument with name {arg.arg}")
-
-    # Define the variable in scope for the function
-    fty = TyFunc(returns, arg_tys)
-    def func_init():
-        # Discover locals for scoping rules
-        discover_locals(inner, stmt.body)
-        # Perform the actual validation
-        inner._func = fty
-        did_return = validate_stmts(inner, stmt.body)
-        if not did_return and returns != TY_NONE:
-            raise GarterError(stmt, "Control flow reaches end of non-void method")
-        # Flush all functions declared within this function!
-        inner.flush()
-
+    fty, func_init = validate_funclike(scope, stmt, clazz)
     if stmt.name in clazz.fields:
-        raise GarterError(stmt, f"Field with name {stmt.name} has "
+        raise GarterError(stmt, f"A field with name {stmt.name} has "
                           f"already been defined")
     clazz.fields[stmt.name] = Attribute(fty, mutable=False)
 
@@ -975,13 +1078,13 @@ def validate_class_stmt(scope, clazz, stmt):
 
 
 def validate_classdef(scope, stmt):
-    ensure_non_keyword(stmt.name)
+    ensure_non_keyword(stmt.name, stmt)
     if len(stmt.bases) > 0 or len(stmt.keywords) > 0:
         raise GarterError(stmt, "Base classes are not supported yet")
     if len(stmt.decorator_list) > 0:
         raise GarterError(stmt, "Decorators are not supported")
 
-    clazz = TyClass({})
+    clazz = TyClass(stmt.name, {})
     if not scope.declare(stmt.name, TyFunc(clazz, [])):
         raise GarterError(stmt, f"Variable with name {stmt.name} has "
                           f"already been defined")
@@ -1063,8 +1166,9 @@ def validate_if(scope, stmt):
     if not TY_BOOL.subsumes(test):
         raise GarterError(stmt.test,
                           "Test in if statement must have type bool")
-    return validate_scoped(scope, stmt.body) and \
-        validate_scoped(scope, stmt.orelse)
+    breturns := validate_scoped(scope, stmt.body)
+    ereturns := validate_scoped(scope, stmt.orelse)
+    return breturns and ereturns
 
 
 def validate_print(scope, expr):
@@ -1122,9 +1226,12 @@ def validate_for(scope, stmt):
         item_ty = validate_range(scope, stmt.iter)
     else:
         list_ty = validate_expr(scope, stmt.iter)
-        if type(list_ty) != TyList:
+        if type(list_ty) == TyList:
+            item_ty = list_ty.item
+        elif type(list_ty) == TyStr:
+            item_ty = TY_STR
+        else:
             raise GarterError(stmt, "Expected [?], instead found {}".format(list_ty))
-        item_ty = list_ty.item
 
     # Introduce the inner scope
     inner = Scope(scope)
@@ -1137,7 +1244,7 @@ def validate_for(scope, stmt):
 
 
 def validate_assert(scope, stmt):
-    test = validate_expr(stmt.test)
+    test = validate_expr(scope, stmt.test)
     if not TY_BOOL.subsumes(test):
         raise GarterError(stmt, "Condition to assert statement must be bool")
     if stmt.msg != None:
@@ -1162,51 +1269,29 @@ def validate_return(scope, stmt):
 
 
 def validate_funcdef(scope, stmt):
-    # Make sure we have a valid function name
-    ensure_non_keyword(stmt.name)
-    if len(stmt.decorator_list) > 0:
-        raise GarterError(stmt, "Decorators are not supported")
-
-    returns = validate_type(scope, stmt.returns) if stmt.returns != None else TY_NONE
-
-    # Make sure we aren't using any unsupported features
-    arguments = stmt.args
-    if arguments.vararg != None:
-        raise GarterError(stmt, "Varargs are not supported")
-    if arguments.kwarg != None:
-        raise GarterError(stmt, "Kwards are not supported")
-    if len(arguments.defaults) > 0 or len(arguments.kw_defaults) > 0:
-        raise GarterError(stmt, "Default arguments are not supported")
-    if len(arguments.kwonlyargs) > 0:
-        raise GarterError(stmt, "Keyword only arguments are not supported")
-
-    # Determine the types of arguments
-    arg_tys = []
-    inner = Scope(scope, root=True)
-    for arg in arguments.args:
-        ensure_non_keyword(arg.arg)
-        if arg.annotation == None:
-            raise GarterError(arg, "Type annotations on arguments are required")
-        ty = validate_type(scope, arg.annotation)
-        arg_tys.append(ty) # Record the type of the argument
-        if not inner.declare(arg.arg, ty):
-            raise GarterError(arg, f"There is another argument with name {arg.arg}")
-
-    # Define the variable in scope for the function
-    fty = TyFunc(returns, arg_tys)
-    def func_init():
-        # Discover locals for scoping rules
-        discover_locals(inner, stmt.body)
-        # Perform the actual validation
-        inner._func = fty
-        did_return = validate_stmts(inner, stmt.body)
-        if not did_return and returns != TY_NONE:
-            raise GarterError(stmt, "Control flow reaches end of non-void function")
-        # Flush all functions declared within this function!
-        inner.flush()
+    fty, func_init = validate_funclike(scope, stmt)
     if not scope.declare(stmt.name, fty, mutable=False, init=func_init):
         raise GarterError(stmt, f"Variable with name {stmt.name} has "
                           f"already been defined")
+
+
+def validate_import(scope, stmt):
+    for name in stmt.names:
+        asname = name.asname if name.asname != None else name.name
+        if name.name == "random":
+            module(scope, asname, 'random', {
+                'randint': TyFunc(TY_INT, [TY_INT, TY_INT]),
+                'random': TyFunc(TY_FLOAT, []),
+            })
+        elif name.name == "math":
+            module(scope, asname, 'math', {
+                'sin': TyFunc(TY_FLOAT, [TY_FLOAT]),
+                'cos': TyFunc(TY_FLOAT, [TY_FLOAT]),
+                'sqrt': TyFunc(TY_FLOAT, [TY_FLOAT]),
+                'abs': TyFunc(TY_FLOAT, [TY_FLOAT]),
+            })
+        else:
+            raise GarterError(stmt, f"Unrecognized module name {name.name}")
 
 
 def validate_stmt(scope, stmt):
@@ -1277,17 +1362,69 @@ def validate_stmt(scope, stmt):
         # Pass statements are allowed anywhere!
         return False
 
+    elif kind is ast.Import:
+        validate_import(scope, stmt)
+        return False
+
     else:
         raise GarterError(stmt, "Statement kind not supported")
 
 
-def validate_stmts(scope, stmts):
+def validate_nonlocal(scope, stmt):
+    for name in stmt.names:
+        vi = scope.lookup(stmt)
+        if not vi:
+            raise GarterError(stmt, f"No such variable named {name}")
+
+        if not vi.mutable:
+            raise GarterError(stmt, f"Cannot use nonlocal statement to refer to "
+                              f"non-mutable nonlocal variable {name}")
+        if vi.local:
+            raise GarterError(stmt, f"Cannot write `nonlocal {name}` multiple times")
+        if vi.globl:
+            raise GarterError(stmt, f"Cannot refer to global variable {name} "
+                              "with 'nonlocal' statement. Instead use the 'global' statement")
+
+        init = (lambda v: (lambda: v.init()))(vi.var)
+        scope.declare(name, vi.ty, mutable=True, init=init)
+
+
+def validate_global(scope, stmt):
+    for name in stmt.names:
+        vi = scope.lookup(name)
+        if not vi:
+            raise GarterError(stmt, f"No such variable named {name}")
+
+        if not vi.mutable:
+            raise GarterError(stmt, f"Cannot use global statement to refer to "
+                              f"non-mutable global variable {name}")
+        if vi.local:
+            raise GarterError(stmt, f"Cannot write `global {name}` multiple times")
+        if not vi.globl:
+            raise GarterError(stmt, f"Cannot refer to non-global variable {name} "
+                              "with 'global' statement. Instead use the 'nonlocal' statement")
+
+        init = (lambda v: (lambda: v.init()))(vi.var)
+        scope.declare(name, vi.ty, mutable=True, init=init)
+
+
+def validate_stmts(scope, stmts, froot=False):
     """
     Validate the listed statements within the scope
     Returns true if the statements listed unconditionally return
     """
     returns = False
     for stmt in stmts:
+        if froot: # nonlocal and global are allowed
+            if type(stmt) is ast.Nonlocal:
+                validate_nonlocal(scope, stmt)
+                continue
+            elif type(stmt) is ast.Global:
+                validate_global(scope, stmt)
+                continue
+            else:
+                froot = False
+
         if returns:
             raise GarterError(stmt, "Unreachable code after statement which "
                               "unconditionally returns")
@@ -1311,8 +1448,10 @@ def validate_mod(scope, mod):
     assert isinstance(mod, ast.mod)
     kind = type(mod)
     if kind is ast.Module:
+        discover_locals(scope, mod.body)
         validate_stmts(scope, mod.body)
     elif kind is ast.Interactive:
+        discover_locals(scope, mod.body)
         validate_stmts(scope, mod.body)
     elif kind is ast.Expression:
         validate_expr(scope, mod.body)
@@ -1323,9 +1462,6 @@ def validate_mod(scope, mod):
 def validate(mod, scope):
     backup = scope.backup()
     try:
-        # Discover locals for scoping rules
-        discover_locals(inner, stmt.body)
-        # Actually validate
         validate_mod(scope, mod)
         scope.flush()
     except:
@@ -1352,7 +1488,7 @@ def gcompile(source,
 
     # Create a default scope if one isn't provided for this invocation
     if not scope:
-        scope = Scope()
+        scope = new_global_scope()
 
     # Record the filename information for error reporting purposes
     global _filename
@@ -1368,4 +1504,11 @@ def gcompile(source,
 
     # Compile the object itself.
     return compile(source, filename, mode, flags, dont_inherit, optimize)
+
+
+def new_global_scope():
+    scope = Scope(None, True)
+    scope.declare("abs", TyFunc(TY_FLOAT, [TY_FLOAT]), mutable=False)
+    scope.declare("ord", TyFunc(TY_INT, [TY_STR]), mutable=False)
+    return scope
 

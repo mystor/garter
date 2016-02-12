@@ -525,7 +525,7 @@ class TracebackException:
 
         stype = self.exc_type.__qualname__
         smod = self.exc_type.__module__
-        if smod not in ("__main__", "builtins"):
+        if smod not in ("__main__", "builtins", "garter"):
             stype = smod + '.' + stype
 
         if not issubclass(self.exc_type, SyntaxError):

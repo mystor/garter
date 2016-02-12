@@ -134,7 +134,7 @@ class CommandCompiler:
 
     def __init__(self,):
         self.compiler = Compile()
-        self.scope = garter.Scope() # A fresh global scope
+        self.scope = garter.new_global_scope() # A fresh global scope
 
     def __call__(self, source, filename="<input>", symbol="single"):
         r"""Compile a command and determine whether it is incomplete.
