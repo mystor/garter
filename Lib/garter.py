@@ -23,33 +23,6 @@ import re
 
 _filename = None # Set by the compile function
 
-# Ideal error?
-
-
-# >>> 1 + "foo"
-#   File "<console>", line 1
-# garter.InvalidOperands:
-#    1| 1 + "foo"
-#       ^   ^
-#      int str
-# Invalid operands to '+' operator: int + str
-#
-# Note: File "<console>", line 1
-#     str(1) + "foo"
-# Consider casting the int to a str first
-
-# >>> foo(10)
-#   File "<console>", line 1
-# garter.TypeMismatch:
-# 1|        foo(10)
-#  None(str)^   ^int
-# Expected argument 1 to 'foo' to be a str, instead found an int
-#
-# Note: File "<console>", line 1
-#     def foo(a: str):
-# foo was declared here
-
-# XXX: pretty-print the code for type annotation purposes?
 
 # XXX: Improve the error system
 #
@@ -58,17 +31,6 @@ _filename = None # Set by the compile function
 class GarterError(SyntaxError):
     def __init__(self, node, body):
         super().__init__(body, (_filename, node.lineno, node.col_offset, None))
-
-
-#def GarterError(node, body):
-#    """
-#    Produce an error object which can be thrown to represent an error.
-#    XXX: Make this better and probably have a custom class for the error.
-#    """
-#    # XXX: This should work better
-#    # XXX: Actually include the text property, and have it set correctly
-#    #return Exception(body)
-#    return SyntaxError(body, (_filename, node.lineno, node.col_offset, None))
 
 
 class Attribute:
@@ -253,7 +215,6 @@ class TyClass(Ty):
         self.fields = fields
 
     def subsumes(self, other):
-        # XXX: Subclassing
         if type(other) != TyClass:
             return False
         return self.completes(other)
@@ -342,7 +303,7 @@ def subsume(a, b):
         return a
     elif b.subsumes(a):
         return b
-    # XXX: Find a c such that c.subsumes(a) and c.subsumes(b)?
+    # Because only superclassing reltn is int/float, should work fine like this
     return None
 
 
@@ -422,7 +383,6 @@ class Scope:
         If the variable has an associated init, and has not been init-ed,
         invokes that function.
         """
-        # XXX: This and the logic in validate_name are very deeply interlinked
         local = True
         curr = self
         while curr != None:
@@ -946,9 +906,6 @@ def validate_input(scope, expr):
         raise GarterError(expr.args[0], "expected str parameter, instead found {ty}")
 
 
-
-# XXX: Can we handle the lvalue context stuff with the built in analysis and
-# the expr_context property?
 def validate_expr(scope, expr, lvalue = False):
     # Confirm that it is valid in the lvalue context
     kind = type(expr)
@@ -963,7 +920,6 @@ def validate_expr(scope, expr, lvalue = False):
             return TY_INT
         return TY_FLOAT
 
-    # XXX: Add support for f-strings? (pep498)
     elif kind is ast.Str:
         return TY_STR
 
@@ -976,6 +932,8 @@ def validate_expr(scope, expr, lvalue = False):
     elif kind is ast.NameConstant:
         if isinstance(expr.value, bool):
             return TY_BOOL
+        if expr.value == None:
+            return TyClass('__unknown__', None)
         raise GarterError(expr, "Unrecognized NameConstant")
 
     elif kind is ast.List:

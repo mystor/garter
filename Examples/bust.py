@@ -1,5 +1,6 @@
 # Blackjack Simulation Program
-# Based on the bust.t program written for the Turing programming language By J.R. Cordy
+# Based on the bust.t program written for the
+# Turing programming language By J.R. Cordy
 
 import random
 
@@ -57,8 +58,8 @@ def somebody_plays() -> bool:
         return False
 
     if players_name != "E.O.Thorp":
-        joe_naives_guts = int(input("What does he stand on? "))
-        while not (0 < joe_naives_guts < 21):
+        joe_naives_guts = input("What does he stand on? ")
+        while not 0 < joe_naives_guts < 21:
             joe_naives_guts = int(input("(1..20): "))
 
     if players_name == "E.O.Thorp":
